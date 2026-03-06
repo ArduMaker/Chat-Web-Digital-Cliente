@@ -17,16 +17,16 @@ Usa este método cuando tengas el plugin en formato `.zip` (adquirido fuera del 
 ## Guía visual
 
 ### 1) Ir a Plugins → Añadir nuevo
-![Paso 1 - Plugins](images/annotated/01-plugins-page.png)
+![Paso 1 - Plugins](images/raw/01-plugins-page.png)
 
 ### 2) Clic en Subir plugin
-![Paso 2 - Subir plugin](images/annotated/02-add-plugins-upload-button.png)
+![Paso 2 - Subir plugin](images/raw/02-add-plugins-upload-button.png)
 
 ### 3) Seleccionar archivo .zip y luego Instalar ahora
-![Paso 3 - Subir zip](images/annotated/03-upload-panel.png)
+![Paso 3 - Subir zip](images/raw/03-upload-panel.png)
 
 ### 4) Elegir el archivo .zip en el selector del sistema
-![Paso 4 - Elegir zip](images/annotated/04-file-picker.png)
+![Paso 4 - Elegir zip](images/raw/04-file-picker.png)
 
 ### 5) Activar plugin
-![Paso 5 - Activar plugin](images/annotated/05-install-success.png)
+![Paso 5 - Activar plugin](images/raw/05-install-success.png)
