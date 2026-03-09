@@ -12,7 +12,6 @@ Usa este método cuando tengas el plugin en formato `.zip` (adquirido fuera del 
 4. Haz clic en **Instalar ahora**
 5. Una vez finalizada la instalación, haz clic en **Activar plugin**
 
-> ⚠️ Asegúrate de que el archivo `.zip` provenga de una fuente confiable para evitar riesgos de seguridad.
 
 ## Guía visual
 
