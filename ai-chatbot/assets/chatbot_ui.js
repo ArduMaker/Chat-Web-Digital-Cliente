@@ -71,7 +71,7 @@ const ChatUI = (function () {
     function addBotMessage(body, text, onFirstMessage) {
       const d = document.createElement("div");
       d.className = "cb-msg cb-bot";
-      const fmt = esc(text).replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>").replace(/\n/g, "<br>");
+      const fmt = renderMarkdown(text);
       d.innerHTML = `${fmt}<span class="cb-msg-time">${time()}</span>`;
       body.appendChild(d);
   
@@ -79,6 +79,39 @@ const ChatUI = (function () {
         if (typeof onFirstMessage === "function") onFirstMessage();
       }
   
+      scroll(body);
+    }
+
+    function addMessageImages(body, images) {
+      if (!Array.isArray(images) || images.length === 0) return;
+
+      const validImages = images
+        .map((img) => img?.url || img?.image || "")
+        .filter((url) => typeof url === "string" && url.trim().length > 0);
+
+      if (validImages.length === 0) return;
+
+      const wrapper = document.createElement("div");
+      wrapper.className = "cb-msg-images";
+
+      for (const url of validImages) {
+        const link = document.createElement("a");
+        link.className = "cb-msg-image-link";
+        link.href = url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+
+        const img = document.createElement("img");
+        img.className = "cb-msg-image";
+        img.src = url;
+        img.alt = "Imagen enviada en el chat";
+        img.loading = "lazy";
+
+        link.appendChild(img);
+        wrapper.appendChild(link);
+      }
+
+      body.appendChild(wrapper);
       scroll(body);
     }
   
@@ -230,6 +263,122 @@ const ChatUI = (function () {
         .replace(/&/g, "&amp;").replace(/</g, "&lt;")
         .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     }
+
+    function parseTableCells(line) {
+      const trimmed = String(line || "").trim().replace(/^\|/, "").replace(/\|$/, "");
+      return trimmed.split("|").map((cell) => cell.trim());
+    }
+
+    function safeLink(link) {
+      const value = String(link || "").trim();
+      if (!value) return "";
+      if (/^javascript:/i.test(value)) return "";
+      return value;
+    }
+
+    function inlineMd(input) {
+      let out = String(input || "");
+      out = out.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+      out = out.replace(/\*(.+?)\*/g, "<em>$1</em>");
+      out = out.replace(/`([^`]+?)`/g, "<code class=\"cb-md-inline\">$1</code>");
+      out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) => {
+        const href = safeLink(url);
+        if (!href) return label;
+        return `<a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+      });
+      return out;
+    }
+
+    function renderMarkdown(text) {
+      const raw = esc(text || "").replace(/\r\n?/g, "\n");
+      const lines = raw.split("\n");
+      const html = [];
+      let i = 0;
+
+      while (i < lines.length) {
+        const line = lines[i];
+        const trimmed = line.trim();
+
+        if (!trimmed) {
+          i += 1;
+          continue;
+        }
+
+        if (/^```/.test(trimmed)) {
+          const codeLines = [];
+          i += 1;
+          while (i < lines.length && !/^```/.test(lines[i].trim())) {
+            codeLines.push(lines[i]);
+            i += 1;
+          }
+          if (i < lines.length) i += 1;
+          html.push(`<pre class="cb-md-pre"><code>${codeLines.join("\n")}</code></pre>`);
+          continue;
+        }
+
+        if (trimmed.includes("|") && i + 1 < lines.length && /^\s*\|?\s*:?-{3,}/.test(lines[i + 1])) {
+          const headers = parseTableCells(trimmed);
+          i += 2;
+          const rows = [];
+          while (i < lines.length && lines[i].includes("|")) {
+            rows.push(parseTableCells(lines[i]));
+            i += 1;
+          }
+
+          const headHtml = headers.map((h) => `<th>${inlineMd(h)}</th>`).join("");
+          const bodyHtml = rows
+            .map((row) => `<tr>${row.map((c) => `<td>${inlineMd(c)}</td>`).join("")}</tr>`)
+            .join("");
+          html.push(`<div class="cb-md-table-wrap"><table class="cb-md-table"><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div>`);
+          continue;
+        }
+
+        if (/^###\s+/.test(trimmed)) {
+          html.push(`<h3 class="cb-md-h3">${inlineMd(trimmed.replace(/^###\s+/, ""))}</h3>`);
+          i += 1;
+          continue;
+        }
+        if (/^##\s+/.test(trimmed)) {
+          html.push(`<h2 class="cb-md-h2">${inlineMd(trimmed.replace(/^##\s+/, ""))}</h2>`);
+          i += 1;
+          continue;
+        }
+        if (/^#\s+/.test(trimmed)) {
+          html.push(`<h1 class="cb-md-h1">${inlineMd(trimmed.replace(/^#\s+/, ""))}</h1>`);
+          i += 1;
+          continue;
+        }
+
+        if (/^[-*]\s+/.test(trimmed)) {
+          const items = [];
+          while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+            items.push(lines[i].replace(/^\s*[-*]\s+/, ""));
+            i += 1;
+          }
+          html.push(`<ul class="cb-md-ul">${items.map((item) => `<li>${inlineMd(item)}</li>`).join("")}</ul>`);
+          continue;
+        }
+
+        if (/^\d+\.\s+/.test(trimmed)) {
+          const items = [];
+          while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+            items.push(lines[i].replace(/^\s*\d+\.\s+/, ""));
+            i += 1;
+          }
+          html.push(`<ol class="cb-md-ol">${items.map((item) => `<li>${inlineMd(item)}</li>`).join("")}</ol>`);
+          continue;
+        }
+
+        const paragraph = [];
+        while (i < lines.length && lines[i].trim()) {
+          paragraph.push(lines[i]);
+          i += 1;
+        }
+        html.push(`<p class="cb-md-p">${inlineMd(paragraph.join("<br>"))}</p>`);
+      }
+
+      return html.join("");
+    }
   
     // ── Pantallas ───────────────────────────────────────────────────────────────
     function showChat(screenForm, screenChat, onImageUpload) {
@@ -265,6 +414,7 @@ const ChatUI = (function () {
       hideAIStatus,
       showImageUploadButton,
       addImagePreview,
+      addMessageImages,
       setResponderStatus,
       addInterventionButton,
       showChat,

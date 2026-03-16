@@ -1,6 +1,6 @@
 // chatbot.js — Entry point DigitalMTX Chat Widget
 // Depende de: chatbot-api.js, chatbot-ui.js, chatbot-poll.js
-console.log("CHATBOT DIGITALMTX v4.0", Date.now());
+console.log("CHATBOT DIGITALMTX v5.1", Date.now());
 
 (function () {
   if (window.__DMTX_CHATBOT_BOOTSTRAPPED__) {
@@ -15,12 +15,13 @@ console.log("CHATBOT DIGITALMTX v4.0", Date.now());
   let customerName = "";
   let customerEmail = "";
   let chatFingerprint = "";
-  let sseTimeout = null;
-  let pollingTimer = null;
-  let liveSyncTimer = null;
   let startingSession = false;
   let pendingImages = [];
+  let pollOpen = false;
+
   const seenAgentMessageKeys = new Set();
+  const seenImageUrls = new Set();
+
   const DEBUG_ENABLED = Boolean(
     (window.DMTX_CHATBOT_CONFIG && window.DMTX_CHATBOT_CONFIG.debug) ||
     (typeof localStorage !== "undefined" && localStorage.getItem("dmtx_chat_debug") === "1")
@@ -30,11 +31,10 @@ console.log("CHATBOT DIGITALMTX v4.0", Date.now());
     console.debug("[WP-Chat][debug]", ...args);
   };
 
-  const SSE_TIMEOUT_MS = 6000;
-  const POLL_INTERVAL_MS = 1200;
-  const POLL_MAX_ATTEMPTS = 30;
-  const WELCOME_MESSAGE = "Hola! 👋 ¿Cómo puedo ayudarte hoy?";
+  const WELCOME_MESSAGE = "¡Hola! 👋 ¿Cómo puedo ayudarte hoy?";
   const SESSION_STORAGE_KEY = "dmtx_chat_public_session";
+  const MAX_IMAGES_PER_REQUEST = 5;
+  const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
 
   const root = ChatUI.createHTML();
   const toggleBtn = root.querySelector(".cb-btn");
@@ -50,13 +50,18 @@ console.log("CHATBOT DIGITALMTX v4.0", Date.now());
   const statusEl = root.querySelector("#cb-responder-status");
   const input = root.querySelector("#cb-input");
   const sendBtn = root.querySelector("#cb-send");
-  
+
   function syncEndButtonVisibility() {
     if (!endBtn) return;
-    const hasSession = Boolean(chatUuid && sessionToken);
-    endBtn.style.display = hasSession ? "inline-flex" : "none";
+    endBtn.style.display = chatUuid && sessionToken ? "inline-flex" : "none";
   }
   syncEndButtonVisibility();
+
+  function updateSendAvailability() {
+    const hasText = Boolean(input.value.trim());
+    const hasImages = pendingImages.length > 0;
+    sendBtn.disabled = !(hasText || hasImages);
+  }
 
   function ensureFingerprint() {
     const key = "dmtx_chat_fingerprint";
@@ -84,44 +89,14 @@ console.log("CHATBOT DIGITALMTX v4.0", Date.now());
     return String(text || "").trim() === "__REQUEST_HUMAN_INTERVENTION__";
   }
 
-  function clearWaitTimers() {
-    if (sseTimeout) {
-      clearTimeout(sseTimeout);
-      sseTimeout = null;
-    }
-    if (pollingTimer) {
-      clearInterval(pollingTimer);
-      pollingTimer = null;
-    }
-  }
+  function normalizeImageUrl(url) {
+    const value = String(url || "").trim();
+    if (!value) return "";
+    if (/^https?:\/\//i.test(value)) return value;
 
-  function stopLiveSync() {
-    if (liveSyncTimer) {
-      clearInterval(liveSyncTimer);
-      liveSyncTimer = null;
-    }
-  }
-
-  function startLiveSync() {
-    if (liveSyncTimer || !chatUuid || !sessionToken) return;
-    liveSyncTimer = setInterval(async () => {
-      if (document.hidden) return;
-      if (!panel.classList.contains("open")) return;
-      if (!chatUuid || !sessionToken) return;
-      try {
-        const data = await ChatAPI.getChat(chatUuid, sessionToken);
-        const messages = Array.isArray(data?.messages) ? data.messages : [];
-        for (const msg of messages) {
-          const sender = getSender(msg);
-          if (sender === "customer") continue;
-          const text = getMessageText(msg);
-          if (!text) continue;
-          renderAgentMessage(text, sender || "bot", msg?.id || msg?.sentAt || text);
-        }
-      } catch (err) {
-        dbg("liveSync:error", err);
-      }
-    }, 3000);
+    const base = String(window?.DMTX_CHATBOT_CONFIG?.apiBaseUrl || "").replace(/\/+$/, "");
+    if (base && value.startsWith("/")) return `${base}${value}`;
+    return value;
   }
 
   function getMessageText(raw) {
@@ -134,36 +109,23 @@ console.log("CHATBOT DIGITALMTX v4.0", Date.now());
     return String(raw?.sender || raw?.role || "").toLowerCase();
   }
 
-  function deriveConversationState(messages) {
-    let waitingForHuman = false;
-    let lastAgentText = "";
-    let lastAgentSender = "bot";
-    let lastAgentKey = "";
+  function getImages(raw) {
+    if (!Array.isArray(raw)) return [];
 
-    for (const msg of Array.isArray(messages) ? messages : []) {
-      const sender = getSender(msg);
-      if (sender === "customer") continue;
-
-      const text = getMessageText(msg);
-      if (!text) continue;
-
-      if (isInterventionSignal(text)) {
-        waitingForHuman = true;
-        continue;
-      }
-
-      // Any agent reply resolves the previous intervention wait state.
-      waitingForHuman = false;
-      lastAgentText = text;
-      lastAgentSender = sender || "bot";
-      lastAgentKey = `${msg?.id || msg?.sentAt || text}`;
+    const unique = [];
+    for (const img of raw) {
+      const url = normalizeImageUrl(img?.url || img?.image || "");
+      if (!url || seenImageUrls.has(url)) continue;
+      seenImageUrls.add(url);
+      unique.push({ ...img, url });
     }
 
-    return { waitingForHuman, lastAgentText, lastAgentSender, lastAgentKey };
+    return unique;
   }
 
   function saveSession() {
     if (!chatUuid || !sessionToken) return;
+
     const payload = {
       chatUuid,
       sessionToken,
@@ -187,11 +149,12 @@ console.log("CHATBOT DIGITALMTX v4.0", Date.now());
     try {
       const raw = localStorage.getItem(SESSION_STORAGE_KEY);
       if (!raw) return null;
+
       const parsed = JSON.parse(raw);
       if (!parsed?.chatUuid || !parsed?.sessionToken) return null;
 
       const expiresAt = parsed.sessionExpiresAt ? new Date(parsed.sessionExpiresAt).getTime() : 0;
-      if (expiresAt && expiresAt - Date.now() < 30000) return null;
+      if (expiresAt && expiresAt - Date.now() < 30_000) return null;
 
       return parsed;
     } catch {
@@ -199,108 +162,213 @@ console.log("CHATBOT DIGITALMTX v4.0", Date.now());
     }
   }
 
-  function ensureInterventionButton() {
+  function clearPendingPreviews() {
+    const previews = body.querySelectorAll(".cb-image-preview");
+    previews.forEach((el) => el.remove());
+  }
+
+  function resetComposer() {
+    input.value = "";
+    input.style.height = "auto";
+    pendingImages = [];
+    clearPendingPreviews();
+    updateSendAvailability();
+  }
+
+  function resetInput() {
+    updateSendAvailability();
+    input.focus();
+  }
+
+  function showWaitingForHuman() {
+    setResponderState("waiting");
+    ChatUI.showBadge(body, "⏳ Esperando a un agente humano...", "cb-badge-orange", "cb-waiting-badge");
+    ChatUI.removeBadge(body, "cb-seller-badge");
+  }
+
+  function showSellerActive() {
+    setResponderState("human");
+    ChatUI.removeBadge(body, "cb-waiting-badge");
+    ChatUI.showBadge(body, "✅ Un agente humano está respondiendo", "cb-badge-green", "cb-seller-badge");
+  }
+
+  function showBotActive() {
+    setResponderState("bot");
+    ChatUI.removeBadge(body, "cb-seller-badge");
+  }
+
+  function renderImages(images) {
+    const newImages = getImages(images);
+    if (newImages.length > 0) {
+      ChatUI.addMessageImages(body, newImages);
+    }
+  }
+
+  function renderAgentMessage(msg) {
+    const sender = getSender(msg);
+    const text = getMessageText(msg);
+    const idSeed = msg?.id || msg?.sentAt || msg?.sent_at || "";
+    const key = `${sender}:${idSeed}:${text}`;
+    const alreadySeen = seenAgentMessageKeys.has(key);
+
+    if (!alreadySeen) {
+      seenAgentMessageKeys.add(key);
+
+      if (isInterventionSignal(text)) {
+        ChatUI.hideTyping();
+        showWaitingForHuman();
+        resetInput();
+        return true;
+      }
+
+      if (text) {
+        ChatUI.hideTyping();
+        ChatUI.addBotMessage(body, text, sender === "bot" ? ensureInterventionButton : null);
+      }
+    }
+
+    if (sender === "seller") {
+      showSellerActive();
+    } else {
+      showBotActive();
+    }
+
+    renderImages(msg?.images);
+    resetInput();
+    return !alreadySeen;
+  }
+
+  function stopPoll() {
+    if (!pollOpen) return;
+    ChatPoll.close();
+    pollOpen = false;
+  }
+
+  function showFormScreen() {
+    screenChat.style.display = "none";
+    screenForm.style.display = "flex";
+    setTimeout(() => nameInput.focus(), 60);
+  }
+
+  function showChatScreen() {
+    ChatUI.showChat(screenForm, screenChat, handleImageUploadButtonClick);
+  }
+
+  async function handleSessionExpired(err) {
+    dbg("session:expired", err);
+    stopPoll();
+    ChatUI.hideTyping();
+    ChatUI.hideAIStatus();
+    clearSession();
+    resetComposer();
+    showFormScreen();
+  }
+
+  async function ensureInterventionButton() {
     const existingStatus = statusEl?.textContent?.toLowerCase() || "";
-    const isHumanActive = existingStatus.includes("humano") && existingStatus.includes("responder");
-    const isWaitingHuman = existingStatus.includes("intervenção humana solicitada");
+    const isHumanActive = existingStatus.includes("humano") && existingStatus.includes("respondiendo");
+    const isWaitingHuman = existingStatus.includes("intervención humana solicitada");
     if (isHumanActive || isWaitingHuman) return;
 
     ChatUI.addInterventionButton(body, async (evt) => {
       const btn = evt?.currentTarget;
       if (!btn || typeof btn !== "object") return;
-      dbg("intervention:click");
-      // Feedback instantaneo para el cliente al solicitar intervención.
-      if (typeof btn.remove === "function") {
-        btn.remove();
-      } else if (btn.parentNode) {
-        btn.parentNode.removeChild(btn);
-      }
-      setResponderState("waiting");
-      ChatUI.showBadge(body, "⏳ Esperando a un agente humano...", "cb-badge-orange", "cb-waiting-badge");
-      ChatUI.addSystemMessage(body, "Solicitud enviada. Un agente humano responderá.");
+
       btn.disabled = true;
       btn.textContent = "Solicitando...";
+      showWaitingForHuman();
+      ChatUI.addSystemMessage(body, "Solicitud enviada. Un agente humano responderá.");
+
       try {
-        await ChatAPI.requestIntervention(chatUuid, customerName, sessionToken);
-        dbg("intervention:sent");
-      } catch {
-        dbg("intervention:error");
+        await ChatAPI.requestIntervention(chatUuid, sessionToken);
+      } catch (err) {
+        dbg("intervention:error", err);
         ChatUI.removeBadge(body, "cb-waiting-badge");
-        ChatUI.addSystemMessage(body, "No se pudo enviar la solicitud. Inténtalo de nuevo.");
+        ChatUI.addSystemMessage(body, "No se pudo solicitar intervención humana. Inténtalo de nuevo.");
+        if (typeof btn.remove === "function") btn.remove();
         ensureInterventionButton();
       }
     });
   }
 
-  function renderAgentMessage(text, sender, dedupeSeed) {
-    const clean = String(text || "").trim();
-    if (!clean) return false;
-    if (isInterventionSignal(clean)) {
-      clearWaitTimers();
-      ChatUI.hideTyping();
-      setResponderState("waiting");
-      ChatUI.showBadge(body, "⏳ Esperando a un agente humano...", "cb-badge-orange", "cb-waiting-badge");
-      resetInput();
-      return false;
-    }
+  function openPoll() {
+    if (!chatUuid || !sessionToken || pollOpen) return;
+    pollOpen = true;
+    dbg("poll:open", { chatUuid });
 
-    const messageId = dedupeSeed || Date.now();
-    const key = `${sender || "bot"}:${messageId}:${clean}`;
-    if (seenAgentMessageKeys.has(key)) return false;
-    seenAgentMessageKeys.add(key);
+    ChatPoll.open(chatUuid, sessionToken, {
+      onThinking: () => {
+        showBotActive();
+        ChatUI.showTyping(body);
+      },
 
-    ChatUI.hideTyping();
-    ChatUI.addBotMessage(body, clean, ensureInterventionButton);
-    if (sender === "seller") {
-      setResponderState("human");
-      ChatUI.removeBadge(body, "cb-waiting-badge");
-      ChatUI.showBadge(body, "✅ Un agente humano está respondiendo", "cb-badge-green", "cb-seller-badge");
-    } else {
-      setResponderState("bot");
-      ChatUI.removeBadge(body, "cb-seller-badge");
-    }
-    resetInput();
-    return true;
-  }
+      onAIStatus: (payload) => {
+        dbg("poll:ai_status", payload);
+        const message = payload?.current_status_message;
+        const isProcessing = Boolean(payload?.is_processing);
 
-  function renderHistory(messages) {
-    if (!Array.isArray(messages) || body.childElementCount > 0) return;
+        if (message) {
+          ChatUI.showAIStatus(body, message, payload?.current_status_step);
+        } else {
+          ChatUI.hideAIStatus();
+        }
 
-    const state = deriveConversationState(messages);
+        if (isProcessing) {
+          showBotActive();
+          ChatUI.showTyping(body);
+        } else {
+          ChatUI.hideTyping();
+        }
+      },
 
-    for (const msg of messages) {
-      const sender = getSender(msg);
-      const text = getMessageText(msg);
-      if (!text) continue;
-      if (isInterventionSignal(text)) {
-        continue;
-      }
+      onMessages: (messages) => {
+        dbg("poll:messages", { count: messages.length });
+        const parsed = ChatPoll.parseMessages(messages);
+        for (const msg of parsed) {
+          if (msg.sender === "customer") continue;
+          renderAgentMessage(msg);
+        }
+      },
 
-      if (sender === "customer") {
-        ChatUI.addUserMessage(body, text);
-      } else {
-        // During history hydration, do not auto-create intervention CTA per message.
-        ChatUI.addBotMessage(body, text, null);
-        seenAgentMessageKeys.add(text);
-        setResponderState(sender === "seller" ? "human" : "bot");
-      }
-    }
+      onImages: (images) => {
+        renderImages(images);
+      },
 
-    if (state.waitingForHuman) {
-      setResponderState("waiting");
-      ChatUI.showBadge(body, "⏳ Esperando a un agente humano...", "cb-badge-orange", "cb-waiting-badge");
-      ChatUI.removeBadge(body, "cb-seller-badge");
-    } else {
-      ChatUI.removeBadge(body, "cb-waiting-badge");
-      const lastAgentIsSeller = state.lastAgentSender === "seller";
-      if (lastAgentIsSeller) {
-        setResponderState("human");
-        ChatUI.showBadge(body, "✅ Un agente humano está respondiendo", "cb-badge-green", "cb-seller-badge");
-      } else {
-        ChatUI.removeBadge(body, "cb-seller-badge");
-        ensureInterventionButton();
-      }
-    }
+      onIntervention: () => {
+        dbg("poll:intervention");
+        ChatUI.hideTyping();
+        showWaitingForHuman();
+        const interventionBtn = body.querySelector(".cb-intervention-btn");
+        if (interventionBtn && typeof interventionBtn.remove === "function") {
+          interventionBtn.remove();
+        }
+      },
+
+      onSellerActive: () => {
+        dbg("poll:seller-active");
+        showSellerActive();
+        const interventionBtn = body.querySelector(".cb-intervention-btn");
+        if (interventionBtn && typeof interventionBtn.remove === "function") {
+          interventionBtn.remove();
+        }
+      },
+
+      onClosed: () => {
+        dbg("poll:chat-closed");
+        ChatUI.addSystemMessage(body, "La conversación fue cerrada.");
+        stopPoll();
+        clearSession();
+      },
+
+      onUnauthorized: async (err) => {
+        await handleSessionExpired(err);
+      },
+
+      onError: (err) => {
+        dbg("poll:error", err);
+        console.warn("[Chat] Error en polling:", err);
+      },
+    });
   }
 
   async function restoreSessionIfPossible() {
@@ -314,78 +382,29 @@ console.log("CHATBOT DIGITALMTX v4.0", Date.now());
     customerEmail = stored.customerEmail || "";
     chatFingerprint = stored.chatFingerprint || ensureFingerprint();
 
-    try {
-      dbg("restoreSession:start", { chatUuid });
-      const chat = await ChatAPI.getChat(chatUuid, sessionToken);
-      ChatUI.showChat(screenForm, screenChat, handleImageUploadButtonClick);
-      renderHistory(chat?.messages || []);
-      openPoll();
-      startLiveSync();
-      syncEndButtonVisibility();
-      dbg("restoreSession:success");
-      return true;
-    } catch (err) {
-      const status = err?.status;
-      // Solo invalida la sesión cuando el backend confirma que no es válida.
-      // En errores transitorios (429/5xx/network), mantiene la sesión para evitar
-      // crear nuevas sesiones en cascada.
-      if (status === 401 || status === 403 || status === 404) {
-        console.warn("[Chat] Sesión almacenada inválida, creando una nueva.", err);
-        clearSession();
-      } else {
-        console.warn("[Chat] No se pudo restaurar la sesión (error transitorio).", err);
-      }
-      dbg("restoreSession:error", { status });
-      return false;
-    }
+    showChatScreen();
+    syncEndButtonVisibility();
+    openPoll();
+    dbg("session:restored", { chatUuid });
+    return true;
   }
 
-  async function pollForAgentResponse(maxAttempts = POLL_MAX_ATTEMPTS) {
-    if (!chatUuid || !sessionToken) return;
+  function resetWidgetToForm() {
+    stopPoll();
+    ChatUI.hideTyping();
+    ChatUI.hideAIStatus();
+    clearSession();
 
-    let attempts = 0;
-    pollingTimer = setInterval(async () => {
-      attempts += 1;
-      dbg("poll:tick", { attempts, chatUuid });
+    startingSession = false;
+    seenAgentMessageKeys.clear();
+    seenImageUrls.clear();
 
-      try {
-        const data = await ChatAPI.getChat(chatUuid, sessionToken);
-        const messages = Array.isArray(data?.messages) ? data.messages : [];
-        const state = deriveConversationState(messages);
+    body.innerHTML = "";
+    resetComposer();
 
-        if (state.waitingForHuman) {
-          dbg("poll:intervention-detected");
-          clearWaitTimers();
-          ChatUI.hideTyping();
-          setResponderState("waiting");
-          ChatUI.showBadge(body, "⏳ Esperando a un agente humano...", "cb-badge-orange", "cb-waiting-badge");
-          resetInput();
-          return;
-        }
-
-        if (state.lastAgentText) {
-          dbg("poll:agent-message-detected");
-          clearWaitTimers();
-          const rendered = renderAgentMessage(state.lastAgentText, state.lastAgentSender, state.lastAgentKey);
-          if (rendered) return;
-        }
-      } catch (err) {
-        dbg("poll:error", err);
-        console.warn("[Chat] Falló el fallback de polling:", err);
-      }
-
-      if (attempts >= maxAttempts) {
-        dbg("poll:max-attempts");
-        clearWaitTimers();
-        ChatUI.hideTyping();
-        if (!body.querySelector("#cb-waiting-badge")) {
-          ChatUI.addSystemMessage(body, "Procesando la respuesta. Inténtalo de nuevo en unos instantes.");
-        }
-        setResponderState("bot");
-        ensureInterventionButton();
-        resetInput();
-      }
-    }, POLL_INTERVAL_MS);
+    input.disabled = false;
+    showFormScreen();
+    dbg("chat:ended");
   }
 
   toggleBtn.onclick = async () => {
@@ -393,52 +412,36 @@ console.log("CHATBOT DIGITALMTX v4.0", Date.now());
     toggleBtn.style.display = "none";
     panel.classList.add("open");
 
-    if (!chatUuid) {
+    if (!chatUuid || !sessionToken) {
       await restoreSessionIfPossible();
+    } else {
+      showChatScreen();
+      openPoll();
     }
-    startLiveSync();
 
     setTimeout(() => (chatUuid ? input : nameInput).focus(), 100);
   };
 
   closeBtn.onclick = () => {
+    stopPoll();
     panel.classList.remove("open");
     toggleBtn.style.display = "flex";
-    stopLiveSync();
   };
-
-  function resetWidgetToForm() {
-    ChatPoll.close();
-    clearWaitTimers();
-    stopLiveSync();
-    ChatUI.hideTyping();
-    clearSession();
-    startingSession = false;
-    seenAgentMessageKeys.clear();
-    pendingImages = [];
-    body.innerHTML = "";
-    input.value = "";
-    input.style.height = "auto";
-    input.disabled = false;
-    sendBtn.disabled = true;
-    screenChat.style.display = "none";
-    screenForm.style.display = "flex";
-    nameInput.focus();
-    dbg("chat:ended");
-  }
 
   endBtn.onclick = async () => {
     const confirmed = window.confirm("¿Finalizar esta conversación?");
     if (!confirmed) return;
+
     if (chatUuid && sessionToken) {
       try {
         await ChatAPI.closeChat(chatUuid, sessionToken);
       } catch (err) {
         dbg("chat:close:error", err);
-        ChatUI.addSystemMessage(body, "No se pudo finalizar la conversación en el servidor. Inténtalo de nuevo.");
+        ChatUI.addSystemMessage(body, "No se pudo cerrar el chat en el servidor. Inténtalo de nuevo.");
         return;
       }
     }
+
     resetWidgetToForm();
   };
 
@@ -454,11 +457,10 @@ console.log("CHATBOT DIGITALMTX v4.0", Date.now());
     if (startingSession) return;
 
     if (chatUuid && sessionToken) {
-      ChatUI.showChat(screenForm, screenChat, handleImageUploadButtonClick);
+      showChatScreen();
       syncEndButtonVisibility();
-      input.focus();
       openPoll();
-      startLiveSync();
+      input.focus();
       return;
     }
 
@@ -479,33 +481,33 @@ console.log("CHATBOT DIGITALMTX v4.0", Date.now());
     startBtn.textContent = "Iniciando...";
 
     try {
-      dbg("startChat:createSession");
       const data = await ChatAPI.createChat(customerName, customerEmail, chatFingerprint);
       chatUuid = data.uuid || data.chat_uuid || data.id || data.chatId;
       sessionToken = data.session_token || data.sessionToken || null;
       sessionExpiresAt = data.expires_at || data.expiresAt || null;
 
-      if (!chatUuid) throw new Error("No se encontró el UUID de la conversación en la respuesta de inicio.");
-      if (!sessionToken) throw new Error("No se encontró el token de sesión en la respuesta de inicio.");
+      if (!chatUuid) throw new Error("No se encontró el UUID de la conversación en la respuesta de /init.");
+      if (!sessionToken) throw new Error("No se encontró el token de sesión en la respuesta de /init.");
 
       saveSession();
-      ChatUI.showChat(screenForm, screenChat, handleImageUploadButtonClick);
-      input.focus();
       syncEndButtonVisibility();
+      showChatScreen();
 
-      ChatUI.addBotMessage(body, WELCOME_MESSAGE, null);
-      setResponderState("bot");
+      if (body.childElementCount === 0) {
+        ChatUI.addBotMessage(body, WELCOME_MESSAGE, null);
+      }
+
+      showBotActive();
       openPoll();
-      startLiveSync();
-      dbg("startChat:ready", { chatUuid });
+      input.focus();
+      dbg("chat:ready", { chatUuid });
     } catch (err) {
-      dbg("startChat:error", err);
-      console.error("[Chat] Error al crear la sesión:", err);
+      dbg("start:error", err);
       const status = err?.status;
       if (status === 429) {
-        ChatUI.addSystemMessage(body, "Demasiados intentos de conexión. Espera un momento e inténtalo de nuevo.");
+        ChatUI.addSystemMessage(body, "Demasiados intentos. Espera un momento e inténtalo de nuevo.");
       } else {
-        ChatUI.addSystemMessage(body, "Error al conectar. Inténtalo de nuevo.");
+        ChatUI.addSystemMessage(body, "Error al iniciar conversación. Inténtalo de nuevo.");
       }
     } finally {
       startingSession = false;
@@ -515,7 +517,7 @@ console.log("CHATBOT DIGITALMTX v4.0", Date.now());
   }
 
   input.addEventListener("input", () => {
-    sendBtn.disabled = !input.value.trim();
+    updateSendAvailability();
     input.style.height = "auto";
     input.style.height = Math.min(input.scrollHeight, 100) + "px";
   });
@@ -528,149 +530,95 @@ console.log("CHATBOT DIGITALMTX v4.0", Date.now());
   });
 
   function handleImageUploadButtonClick() {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "image/*";
-    input.multiple = true;
-    input.onchange = async (e) => {
+    const picker = document.createElement("input");
+    picker.type = "file";
+    picker.accept = "image/*";
+    picker.multiple = true;
+
+    picker.onchange = (e) => {
       const files = Array.from(e.target.files || []);
       if (files.length === 0) return;
-      
-      const validFiles = files.filter(f => f.type.startsWith("image/")).slice(0, 5 - pendingImages.length);
-      if (validFiles.length === 0) return;
-      
-      for (const file of validFiles) {
+
+      let availableSlots = MAX_IMAGES_PER_REQUEST - pendingImages.length;
+      if (availableSlots <= 0) {
+        ChatUI.addSystemMessage(body, "Solo puedes enviar hasta 5 imágenes por mensaje.");
+        return;
+      }
+
+      for (const file of files) {
+        if (availableSlots <= 0) break;
+        if (!file.type.startsWith("image/")) continue;
+        if (file.size > MAX_IMAGE_SIZE_BYTES) {
+          ChatUI.addSystemMessage(body, `La imagen ${file.name} supera 10MB y no se agregó.`);
+          continue;
+        }
+
         pendingImages.push(file);
+        availableSlots -= 1;
+
         ChatUI.addImagePreview(body, file, () => {
           const idx = pendingImages.indexOf(file);
-          if (idx > -1) pendingImages.splice(idx, 1);
+          if (idx >= 0) pendingImages.splice(idx, 1);
+          updateSendAvailability();
         });
       }
+
+      updateSendAvailability();
     };
-    input.click();
+
+    picker.click();
   }
 
   sendBtn.onclick = doSend;
 
   async function doSend() {
     const text = input.value.trim();
-    if (!text && pendingImages.length === 0) return;
+    const hasText = Boolean(text);
+    const hasImages = pendingImages.length > 0;
+
+    if (!hasText && !hasImages) return;
     if (!chatUuid || !sessionToken) return;
 
     input.value = "";
     input.style.height = "auto";
-    sendBtn.disabled = true;
+    updateSendAvailability();
 
-    if (pendingImages.length > 0) {
+    if (hasImages) {
       try {
-        dbg("send:uploading-images", { count: pendingImages.length });
         await ChatAPI.uploadImages(chatUuid, pendingImages, sessionToken);
-        pendingImages = [];
+        resetComposer();
+        if (!hasText) {
+          ChatUI.addSystemMessage(body, "Imágenes enviadas. Procesando...");
+          ChatUI.showTyping(body);
+        }
       } catch (err) {
         dbg("send:image-upload-error", err);
-        ChatUI.addSystemMessage(body, "Error al subir las imágenes. Continuando sin ellas.");
-        pendingImages = [];
+        if (!hasText) {
+          ChatUI.addSystemMessage(body, "Error al subir imágenes. Inténtalo nuevamente.");
+          return;
+        }
+        ChatUI.addSystemMessage(body, "No se pudieron subir las imágenes. Enviando solo el texto.");
+        resetComposer();
       }
     }
 
-    if (!text) return;
+    if (!hasText) {
+      resetInput();
+      return;
+    }
 
     ChatUI.addUserMessage(body, text);
     ChatUI.showTyping(body);
-    dbg("send:start", { textLength: text.length, chatUuid });
-
-    clearWaitTimers();
-    sseTimeout = setTimeout(() => {
-      pollForAgentResponse();
-    }, SSE_TIMEOUT_MS);
 
     try {
       await ChatAPI.sendMessage(chatUuid, customerName, text, sessionToken);
       saveSession();
-      dbg("send:success");
+      dbg("send:ok");
     } catch (err) {
       dbg("send:error", err);
-      console.error("[Chat] Error al enviar:", err);
-      clearWaitTimers();
       ChatUI.hideTyping();
-      ChatUI.addSystemMessage(body, "Error al enviar. Inténtalo de nuevo.");
+      ChatUI.addSystemMessage(body, "Error al enviar el mensaje. Inténtalo de nuevo.");
       resetInput();
     }
-  }
-
-  function resetInput() {
-    sendBtn.disabled = !input.value.trim();
-    input.focus();
-  }
-
-  function openPoll() {
-    if (!chatUuid || !sessionToken) return;
-    dbg("poll:open", { chatUuid });
-
-    ChatPoll.open(chatUuid, sessionToken, {
-      onThinking: () => {
-        dbg("poll:thinking");
-        setResponderState("bot");
-        ChatUI.showTyping(body);
-      },
-
-      onAIStatus: (payload) => {
-        dbg("poll:ai_status", payload);
-        const step = payload?.current_status_step;
-        const message = payload?.current_status_message;
-        if (message) {
-          ChatUI.showAIStatus(body, message, step);
-          ChatPoll.updateAIStatus(true);
-        } else {
-          ChatUI.hideAIStatus(body);
-          ChatPoll.updateAIStatus(false);
-        }
-      },
-
-      onMessages: (messages) => {
-        dbg("poll:messages", { count: messages.length });
-        const parsed = ChatPoll.parseMessages(messages);
-        for (const msg of parsed) {
-          if (msg.sender === "customer") continue;
-          const rendered = renderAgentMessage(msg.text, msg.sender, msg.id || msg.sentAt || msg.text);
-          if (rendered) {
-            clearWaitTimers();
-            ChatPoll.updateAIStatus(false);
-          }
-        }
-      },
-
-      onIntervention: () => {
-        dbg("poll:intervention");
-        clearWaitTimers();
-        ChatUI.hideTyping();
-        setResponderState("waiting");
-        ChatUI.showBadge(body, "⏳ Esperando a un agente humano...", "cb-badge-orange", "cb-waiting-badge");
-        ChatUI.removeBadge(body, "cb-seller-badge");
-        const interventionBtn = body.querySelector(".cb-intervention-btn");
-        if (interventionBtn && typeof interventionBtn.remove === "function") {
-          interventionBtn.remove();
-        }
-        resetInput();
-        ChatPoll.updateAIStatus(false);
-      },
-
-      onSellerActive: () => {
-        dbg("poll:seller-active");
-        setResponderState("human");
-        ChatUI.removeBadge(body, "cb-waiting-badge");
-        ChatUI.showBadge(body, "✅ Un agente humano está respondiendo", "cb-badge-green", "cb-seller-badge");
-        const interventionBtn = body.querySelector(".cb-intervention-btn");
-        if (interventionBtn && typeof interventionBtn.remove === "function") {
-          interventionBtn.remove();
-        }
-        ChatPoll.updateAIStatus(false);
-      },
-
-      onError: (err) => {
-        dbg("poll:error", err);
-        console.warn("[Chat] Error en polling:", err);
-      },
-    });
   }
 })();

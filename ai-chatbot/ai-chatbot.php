@@ -2,13 +2,13 @@
 /*
 Plugin Name: AI Chatbot Widget
 Description: Chat widget DigitalMTX.
-Version: 5.0
+Version: 5.1
 Author: Ardumaker
 */
 
 add_action('wp_enqueue_scripts', function () {
   $dir = plugin_dir_url(__FILE__) . 'assets/';
-  $v   = '5.0';
+  $v   = '5.1';
 
   wp_enqueue_style(
     'cb-css',
@@ -27,27 +27,4 @@ add_action('wp_enqueue_scripts', function () {
     'apiBaseUrl' => 'https://apidigitalmtx.arducloud.com',
     'debug' => (defined('WP_DEBUG') && WP_DEBUG),
   ]);
-});
-
-add_action('wp_footer', function() {
-    ?>
-    <button class="cb-btn">💬</button>
-    <div class="cb-panel">
-        <div class="cb-header">
-            <div class="cb-header-info">
-                <div class="cb-avatar"></div>
-                <div>
-                    <div class="cb-title">DigitalMTX Chat</div>
-                    <div class="cb-sub">Estamos en línea</div>
-                </div>
-            </div>
-            <button class="cb-close-btn">✖</button>
-        </div>
-        <div class="cb-body"></div>
-        <div class="cb-footer">
-            <textarea class="cb-input" placeholder="Escribe aquí..."></textarea>
-            <button class="cb-send-btn">▶</button>
-        </div>
-    </div>
-    <?php
 });
