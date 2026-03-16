@@ -82,7 +82,7 @@ const ChatUI = (function () {
       scroll(body);
     }
 
-    function addMessageImages(body, images) {
+    function addMessageImages(body, images, sender = "bot") {
       if (!Array.isArray(images) || images.length === 0) return;
 
       const validImages = images
@@ -92,7 +92,8 @@ const ChatUI = (function () {
       if (validImages.length === 0) return;
 
       const wrapper = document.createElement("div");
-      wrapper.className = "cb-msg-images";
+      const isCustomer = String(sender || "").toLowerCase() === "customer";
+      wrapper.className = `cb-msg-images ${isCustomer ? "cb-msg-images-customer" : "cb-msg-images-bot"}`;
 
       for (const url of validImages) {
         const link = document.createElement("a");

@@ -13,7 +13,7 @@
   
   .cb-panel {
     position:fixed;right:24px;bottom:100px;
-    width:360px;max-height:560px;
+    width:min(94vw, 480px);height:min(82vh, 760px);
     background:white;border-radius:20px;
     box-shadow:0 20px 60px rgba(0,0,0,.2);
     display:none;flex-direction:column;
@@ -21,6 +21,16 @@
     font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
   }
   .cb-panel.open{display:flex}
+
+  @media(max-width:640px){
+    .cb-panel{
+      right:12px;
+      bottom:12px;
+      width:calc(100vw - 24px);
+      height:calc(100vh - 92px);
+      border-radius:16px;
+    }
+  }
   
   /* Header */
   .cb-header {
@@ -76,7 +86,9 @@
   .cb-msg a{color:#1d4ed8;text-decoration:underline}
 
   /* Imágenes recibidas en mensajes */
-  .cb-msg-images{align-self:flex-start;display:flex;gap:8px;flex-wrap:wrap;max-width:82%;margin-top:2px}
+  .cb-msg-images{display:flex;gap:8px;flex-wrap:wrap;max-width:82%;margin-top:2px}
+  .cb-msg-images-bot{align-self:flex-start}
+  .cb-msg-images-customer{align-self:flex-end;justify-content:flex-end}
   .cb-msg-image-link{display:block}
   .cb-msg-image{width:108px;height:108px;object-fit:cover;border-radius:10px;border:1px solid #e5e7eb;background:#fff}
   

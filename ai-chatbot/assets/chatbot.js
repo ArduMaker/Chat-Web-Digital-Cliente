@@ -18,6 +18,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
   let startingSession = false;
   let pendingImages = [];
   let pollOpen = false;
+  let aiStatusVisible = false;
 
   const seenAgentMessageKeys = new Set();
   const seenImageUrls = new Set();
@@ -197,10 +198,10 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     ChatUI.removeBadge(body, "cb-seller-badge");
   }
 
-  function renderImages(images) {
+  function renderImages(images, sender = "bot") {
     const newImages = getImages(images);
     if (newImages.length > 0) {
-      ChatUI.addMessageImages(body, newImages);
+      ChatUI.addMessageImages(body, newImages, sender);
     }
   }
 
@@ -216,6 +217,8 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
 
       if (isInterventionSignal(text)) {
         ChatUI.hideTyping();
+        ChatUI.hideAIStatus();
+        aiStatusVisible = false;
         showWaitingForHuman();
         resetInput();
         return true;
@@ -223,6 +226,8 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
 
       if (text) {
         ChatUI.hideTyping();
+        ChatUI.hideAIStatus();
+        aiStatusVisible = false;
         ChatUI.addBotMessage(body, text, sender === "bot" ? ensureInterventionButton : null);
       }
     }
@@ -233,7 +238,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
       showBotActive();
     }
 
-    renderImages(msg?.images);
+    renderImages(msg?.images, sender);
     resetInput();
     return !alreadySeen;
   }
@@ -259,6 +264,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     stopPoll();
     ChatUI.hideTyping();
     ChatUI.hideAIStatus();
+    aiStatusVisible = false;
     clearSession();
     resetComposer();
     showFormScreen();
@@ -298,6 +304,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
 
     ChatPoll.open(chatUuid, sessionToken, {
       onThinking: () => {
+        if (aiStatusVisible) return;
         showBotActive();
         ChatUI.showTyping(body);
       },
@@ -306,16 +313,23 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
         dbg("poll:ai_status", payload);
         const message = payload?.current_status_message;
         const isProcessing = Boolean(payload?.is_processing);
+        const hasStatusMessage = typeof message === "string" && message.trim().length > 0;
 
-        if (message) {
+        if (hasStatusMessage) {
+          aiStatusVisible = true;
           ChatUI.showAIStatus(body, message, payload?.current_status_step);
         } else {
+          aiStatusVisible = false;
           ChatUI.hideAIStatus();
         }
 
         if (isProcessing) {
           showBotActive();
-          ChatUI.showTyping(body);
+          if (aiStatusVisible) {
+            ChatUI.hideTyping();
+          } else {
+            ChatUI.showTyping(body);
+          }
         } else {
           ChatUI.hideTyping();
         }
@@ -325,13 +339,16 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
         dbg("poll:messages", { count: messages.length });
         const parsed = ChatPoll.parseMessages(messages);
         for (const msg of parsed) {
-          if (msg.sender === "customer") continue;
+          if (msg.sender === "customer") {
+            renderImages(msg?.images, "customer");
+            continue;
+          }
           renderAgentMessage(msg);
         }
       },
 
-      onImages: (images) => {
-        renderImages(images);
+      onImages: () => {
+        // Las imágenes se manejan dentro de onMessages para conservar el lado correcto por remitente.
       },
 
       onIntervention: () => {
@@ -393,6 +410,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     stopPoll();
     ChatUI.hideTyping();
     ChatUI.hideAIStatus();
+    aiStatusVisible = false;
     clearSession();
 
     startingSession = false;
@@ -588,7 +606,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
         await ChatAPI.uploadImages(chatUuid, pendingImages, sessionToken);
         resetComposer();
         if (!hasText) {
-          ChatUI.addSystemMessage(body, "Imágenes enviadas. Procesando...");
+          showBotActive();
           ChatUI.showTyping(body);
         }
       } catch (err) {
