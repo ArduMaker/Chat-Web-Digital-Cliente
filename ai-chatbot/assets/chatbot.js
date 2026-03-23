@@ -498,8 +498,6 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
 
         if (isProcessing) {
           setAwaitingResponse(true);
-        } else if (!hasStatusMessage && !lastPipelineStatusMessage) {
-          setAwaitingResponse(false);
         }
 
         if (effectiveMessage) {
