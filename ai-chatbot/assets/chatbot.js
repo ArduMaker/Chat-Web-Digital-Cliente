@@ -439,6 +439,9 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
   }
 
   async function ensureInterventionButton() {
+    const headerContainer = panel.querySelector("#cb-intervention-container");
+    if (!headerContainer) return;
+
     ChatUI.addInterventionButton(body, async (evt) => {
       const btn = evt?.currentTarget;
       if (!btn || typeof btn !== "object") return;

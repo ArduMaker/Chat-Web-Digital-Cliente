@@ -21,6 +21,7 @@ const ChatUI = (function () {
     </div>
     <div class="cb-header-actions">
       <button class="cb-close-btn" aria-label="Cerrar">${CLOSE_SVG}</button>
+      <div id="cb-intervention-container" style="display:none"></div>
       <button class="cb-end-btn" id="cb-end-chat" type="button">Finalizar conversación</button>
     </div>
   </div>
@@ -297,12 +298,16 @@ const ChatUI = (function () {
       const existing = body.querySelector(".cb-intervention-btn");
       if (existing) return existing;
 
+      const container = document.querySelector("#cb-intervention-container");
+      if (!container) return null;
+
       const btn = document.createElement("button");
       btn.className = "cb-intervention-btn";
       btn.textContent = "Hablar con un humano";
       btn.onclick = onClick;
-      body.appendChild(btn);
-      scroll(body);
+      container.appendChild(btn);
+      container.style.display = "flex";
+      container.style.alignItems = "center";
       return btn;
     }
   
