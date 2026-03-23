@@ -20,11 +20,14 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
   let pollOpen = false;
   let aiStatusVisible = false;
   let awaitingResponse = false;
+  let interventionRequested = false;
   let pendingAITrace = null;
   let pendingAITraceId = null;
   let lastPipelineStatusMessage = "";
 
   const seenAgentMessageKeys = new Set();
+  const seenCustomerMessageKeys = new Set();
+  const outboundTextQueue = [];
   const seenImageUrls = new Set();
 
   const DEBUG_ENABLED = Boolean(
@@ -283,6 +286,39 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     awaitingResponse = Boolean(value);
   }
 
+  function normalizeTextForMatch(text) {
+    return String(text || "").trim().replace(/\s+/g, " ").toLowerCase();
+  }
+
+  function queueOutboundText(text) {
+    const normalized = normalizeTextForMatch(text);
+    if (!normalized) return;
+    outboundTextQueue.push({ text: normalized, at: Date.now() });
+    if (outboundTextQueue.length > 40) {
+      outboundTextQueue.splice(0, outboundTextQueue.length - 40);
+    }
+  }
+
+  function consumeOutboundEcho(text) {
+    const normalized = normalizeTextForMatch(text);
+    if (!normalized) return false;
+    const now = Date.now();
+
+    for (let i = outboundTextQueue.length - 1; i >= 0; i -= 1) {
+      if (now - outboundTextQueue[i].at > 90_000) {
+        outboundTextQueue.splice(i, 1);
+      }
+    }
+
+    for (let i = 0; i < outboundTextQueue.length; i += 1) {
+      if (outboundTextQueue[i].text === normalized) {
+        outboundTextQueue.splice(i, 1);
+        return true;
+      }
+    }
+    return false;
+  }
+
   function showWaitingForHuman() {
     setResponderState("waiting");
     ChatUI.showBadge(body, "⏳ Esperando a un agente humano...", "cb-badge-orange", "cb-waiting-badge");
@@ -348,6 +384,28 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     return !alreadySeen;
   }
 
+  function renderCustomerMessage(msg) {
+    const sender = getSender(msg);
+    const text = getMessageText(msg);
+    const idSeed = msg?.id || msg?.sentAt || msg?.sent_at || "";
+    const key = `${sender}:${idSeed}:${text}`;
+
+    capturePipelineFromMessage(msg);
+    renderImages(msg?.images, "customer");
+
+    if (seenCustomerMessageKeys.has(key)) return false;
+    seenCustomerMessageKeys.add(key);
+
+    if (!text) return false;
+
+    if (consumeOutboundEcho(text)) {
+      return false;
+    }
+
+    ChatUI.addUserMessage(body, text);
+    return true;
+  }
+
   function stopPoll() {
     if (!pollOpen) return;
     ChatPoll.close();
@@ -370,6 +428,8 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     ChatUI.hideTyping();
     ChatUI.hideAIStatus();
     aiStatusVisible = false;
+    awaitingResponse = false;
+    interventionRequested = false;
     pendingAITrace = null;
     pendingAITraceId = null;
     lastPipelineStatusMessage = "";
@@ -379,11 +439,14 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
   }
 
   async function ensureInterventionButton() {
-    if (isHumanStateActive()) return;
-
     ChatUI.addInterventionButton(body, async (evt) => {
       const btn = evt?.currentTarget;
       if (!btn || typeof btn !== "object") return;
+
+      if (interventionRequested) {
+        showWaitingForHuman();
+        return;
+      }
 
       btn.disabled = true;
       btn.textContent = "Solicitando...";
@@ -392,12 +455,15 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
 
       try {
         await ChatAPI.requestIntervention(chatUuid, sessionToken);
+        interventionRequested = true;
+        btn.disabled = false;
+        btn.textContent = "Hablar con un humano";
       } catch (err) {
         dbg("intervention:error", err);
         ChatUI.removeBadge(body, "cb-waiting-badge");
         ChatUI.addSystemMessage(body, "No se pudo solicitar intervención humana. Inténtalo de nuevo.");
-        if (typeof btn.remove === "function") btn.remove();
-        ensureInterventionButton();
+        btn.disabled = false;
+        btn.textContent = "Hablar con un humano";
       }
     });
   }
@@ -460,11 +526,18 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
         const parsed = ChatPoll.parseMessages(messages);
         for (const msg of parsed) {
           if (msg.sender === "customer") {
-            capturePipelineFromMessage(msg);
-            renderImages(msg?.images, "customer");
+            renderCustomerMessage(msg);
             continue;
           }
           renderAgentMessage(msg);
+        }
+
+        const lastMessage = parsed.length > 0 ? parsed[parsed.length - 1] : null;
+        if (lastMessage && lastMessage.sender !== "customer") {
+          setAwaitingResponse(false);
+          ChatUI.hideTyping();
+          ChatUI.hideAIStatus();
+          aiStatusVisible = false;
         }
       },
 
@@ -475,22 +548,16 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
       onIntervention: () => {
         dbg("poll:intervention");
         setAwaitingResponse(false);
+        interventionRequested = true;
         ChatUI.hideTyping();
         showWaitingForHuman();
-        const interventionBtn = body.querySelector(".cb-intervention-btn");
-        if (interventionBtn && typeof interventionBtn.remove === "function") {
-          interventionBtn.remove();
-        }
       },
 
       onSellerActive: () => {
         dbg("poll:seller-active");
         setAwaitingResponse(false);
+        interventionRequested = false;
         showSellerActive();
-        const interventionBtn = body.querySelector(".cb-intervention-btn");
-        if (interventionBtn && typeof interventionBtn.remove === "function") {
-          interventionBtn.remove();
-        }
       },
 
       onClosed: () => {
@@ -521,8 +588,10 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     customerName = stored.customerName || "Cliente";
     customerEmail = stored.customerEmail || "";
     chatFingerprint = stored.chatFingerprint || ensureFingerprint();
+    interventionRequested = false;
 
     showChatScreen();
+    ensureInterventionButton();
     syncEndButtonVisibility();
     openPoll();
     dbg("session:restored", { chatUuid });
@@ -535,6 +604,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     ChatUI.hideAIStatus();
     aiStatusVisible = false;
     awaitingResponse = false;
+    interventionRequested = false;
     pendingAITrace = null;
     pendingAITraceId = null;
     lastPipelineStatusMessage = "";
@@ -542,6 +612,8 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
 
     startingSession = false;
     seenAgentMessageKeys.clear();
+    seenCustomerMessageKeys.clear();
+    outboundTextQueue.length = 0;
     seenImageUrls.clear();
 
     body.innerHTML = "";
@@ -561,6 +633,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
       await restoreSessionIfPossible();
     } else {
       showChatScreen();
+      ensureInterventionButton();
       openPoll();
     }
 
@@ -603,6 +676,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
 
     if (chatUuid && sessionToken) {
       showChatScreen();
+      ensureInterventionButton();
       syncEndButtonVisibility();
       openPoll();
       input.focus();
@@ -637,6 +711,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
       saveSession();
       syncEndButtonVisibility();
       showChatScreen();
+      ensureInterventionButton();
 
       if (body.childElementCount === 0) {
         ChatUI.addBotMessage(body, WELCOME_MESSAGE, null);
@@ -754,6 +829,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     }
 
     ChatUI.addUserMessage(body, text);
+    queueOutboundText(text);
     setAwaitingResponse(true);
     ChatUI.showTyping(body);
 
