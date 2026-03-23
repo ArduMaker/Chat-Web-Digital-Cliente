@@ -21,6 +21,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
   let aiStatusVisible = false;
   let awaitingResponse = false;
   let interventionRequested = false;
+  let userHasSentMessage = false;
   let pendingAITrace = null;
   let pendingAITraceId = null;
   let lastPipelineStatusMessage = "";
@@ -442,6 +443,8 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     const headerContainer = panel.querySelector("#cb-intervention-container");
     if (!headerContainer) return;
 
+    if (!userHasSentMessage) return;
+
     const existing = headerContainer.querySelector(".cb-intervention-btn");
     if (existing) return;
 
@@ -597,7 +600,6 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     interventionRequested = false;
 
     showChatScreen();
-    ensureInterventionButton();
     syncEndButtonVisibility();
     openPoll();
     dbg("session:restored", { chatUuid });
@@ -617,6 +619,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     clearSession();
 
     startingSession = false;
+    userHasSentMessage = false;
     seenAgentMessageKeys.clear();
     seenCustomerMessageKeys.clear();
     outboundTextQueue.length = 0;
@@ -639,7 +642,6 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
       await restoreSessionIfPossible();
     } else {
       showChatScreen();
-      ensureInterventionButton();
       openPoll();
     }
 
@@ -682,7 +684,6 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
 
     if (chatUuid && sessionToken) {
       showChatScreen();
-      ensureInterventionButton();
       syncEndButtonVisibility();
       openPoll();
       input.focus();
@@ -717,7 +718,6 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
       saveSession();
       syncEndButtonVisibility();
       showChatScreen();
-      ensureInterventionButton();
 
       if (body.childElementCount === 0) {
         ChatUI.addBotMessage(body, WELCOME_MESSAGE, null);
@@ -836,8 +836,10 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
 
     ChatUI.addUserMessage(body, text);
     queueOutboundText(text);
+    userHasSentMessage = true;
     setAwaitingResponse(true);
     ChatUI.showTyping(body);
+    ensureInterventionButton();
 
     try {
       await ChatAPI.sendMessage(chatUuid, customerName, text, sessionToken);
