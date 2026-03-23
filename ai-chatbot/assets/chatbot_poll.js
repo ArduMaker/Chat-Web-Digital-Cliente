@@ -5,7 +5,8 @@ const ChatPoll = (function () {
   let retries = 0;
   let lastServerTime = null;
 
-  const POLL_INTERVAL_MS = 4000; // 4 segundos
+  const POLL_INTERVAL_MS = 5000; // 5 segundos en estado normal
+  const FAST_POLL_INTERVAL_MS = 2000; // 2 segundos cuando se espera respuesta
   const BASE_RETRY_MS = 1000;
   const MAX_RETRY_DELAY_MS = 30000;
   const MAX_RETRIES = 10;
@@ -72,7 +73,14 @@ const ChatPoll = (function () {
         }
 
         retries = 0;
-        scheduleNextPoll(chatUuid, sessionToken, handlers, POLL_INTERVAL_MS);
+        let nextDelay = POLL_INTERVAL_MS;
+        if (typeof handlers?.getPollIntervalMs === "function") {
+          const dynamicDelay = Number(handlers.getPollIntervalMs(data));
+          if (Number.isFinite(dynamicDelay) && dynamicDelay > 0) {
+            nextDelay = dynamicDelay;
+          }
+        }
+        scheduleNextPoll(chatUuid, sessionToken, handlers, nextDelay);
       } catch (err) {
         dbg("poll:error", err);
 
@@ -127,10 +135,22 @@ const ChatPoll = (function () {
       const sentAt = msg?.sentAt || msg?.sent_at;
       const images = Array.isArray(msg?.images) ? msg.images : [];
       const senderName = msg?.senderName || msg?.sender_name || "";
+      const metadata = msg?.metadata && typeof msg.metadata === "object" ? msg.metadata : {};
+      const chat = msg?.chat && typeof msg.chat === "object" ? msg.chat : null;
 
-      return { text, sender, id, sentAt, images, senderName };
+      return {
+        text,
+        sender,
+        id,
+        sentAt,
+        images,
+        senderName,
+        metadata,
+        chat,
+        raw: msg,
+      };
     });
   }
 
-  return { open, close, parseMessages };
+  return { open, close, parseMessages, POLL_INTERVAL_MS, FAST_POLL_INTERVAL_MS };
 })();

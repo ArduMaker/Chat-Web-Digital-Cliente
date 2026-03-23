@@ -19,6 +19,10 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
   let pendingImages = [];
   let pollOpen = false;
   let aiStatusVisible = false;
+  let awaitingResponse = false;
+  let pendingAITrace = null;
+  let pendingAITraceId = null;
+  let lastPipelineStatusMessage = "";
 
   const seenAgentMessageKeys = new Set();
   const seenImageUrls = new Set();
@@ -84,6 +88,100 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
       return;
     }
     ChatUI.setResponderStatus(statusEl, "Asistente virtual respondiendo", "neutral");
+  }
+
+  function isHumanStateActive() {
+    const existingStatus = statusEl?.textContent?.toLowerCase() || "";
+    const isHumanActive = existingStatus.includes("humano") && existingStatus.includes("respondiendo");
+    const isWaitingHuman = existingStatus.includes("intervención humana solicitada");
+    return isHumanActive || isWaitingHuman;
+  }
+
+  function setPipelineLiveStatus(message) {
+    const text = String(message || "").trim();
+    if (!text || isHumanStateActive()) return;
+    ChatUI.setResponderStatus(statusEl, `IA en proceso: ${text}`, "waiting");
+  }
+
+  function formatServerDate(value) {
+    if (!value) return "";
+    const dt = new Date(value);
+    if (Number.isNaN(dt.getTime())) return String(value);
+    return dt.toLocaleString("es-ES", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  }
+
+  function parsePipelineTrace(metadata) {
+    const history = Array.isArray(metadata?.pipeline_history) ? metadata.pipeline_history : [];
+    const normalized = history
+      .map((entry) => {
+        const pipeline = entry?.foto_pipeline && typeof entry.foto_pipeline === "object" ? entry.foto_pipeline : {};
+        const label = String(entry?.timestamp || pipeline?.estado || "Paso de procesamiento").trim();
+        const detail = String(pipeline?.detalle || "").trim();
+        const status = String(pipeline?.estado || "").trim();
+        const loggedAt = formatServerDate(entry?.logged_at || pipeline?.ultima_revision || "");
+        return { label, detail, status, loggedAt };
+      })
+      .filter((step) => step.label || step.detail || step.status);
+
+    const dedup = [];
+    const seen = new Set();
+    for (const step of normalized) {
+      const key = `${step.label}|${step.detail}|${step.status}|${step.loggedAt}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      dedup.push(step);
+    }
+    return dedup;
+  }
+
+  function getLivePipelineStatus(metadata) {
+    const pipeline = metadata?.foto_pipeline && typeof metadata.foto_pipeline === "object" ? metadata.foto_pipeline : {};
+    const history = Array.isArray(metadata?.pipeline_history) ? metadata.pipeline_history : [];
+    const latest = history.length > 0 ? history[history.length - 1] : null;
+    const latestPipeline = latest?.foto_pipeline && typeof latest.foto_pipeline === "object" ? latest.foto_pipeline : {};
+
+    return String(
+      metadata?.timestamp ||
+      latest?.timestamp ||
+      pipeline?.estado ||
+      latestPipeline?.estado ||
+      pipeline?.detalle ||
+      latestPipeline?.detalle ||
+      ""
+    ).trim();
+  }
+
+  function capturePipelineFromMessage(msg) {
+    const metadata = msg?.metadata && typeof msg.metadata === "object" ? msg.metadata : {};
+    const steps = parsePipelineTrace(metadata);
+    if (steps.length > 0) {
+      pendingAITrace = steps;
+      pendingAITraceId = String(msg?.id || msg?.sentAt || msg?.sent_at || Date.now());
+    }
+
+    const liveStatus = getLivePipelineStatus(metadata);
+    if (liveStatus) {
+      lastPipelineStatusMessage = liveStatus;
+      setPipelineLiveStatus(liveStatus);
+      aiStatusVisible = true;
+      ChatUI.showAIStatus(body, liveStatus);
+      ChatUI.hideTyping();
+    }
+  }
+
+  function flushPendingAITrace() {
+    if (!pendingAITrace || pendingAITrace.length === 0) return;
+    ChatUI.addAITrace(body, pendingAITrace, pendingAITraceId || undefined);
+    pendingAITrace = null;
+    pendingAITraceId = null;
+    lastPipelineStatusMessage = "";
   }
 
   function isInterventionSignal(text) {
@@ -181,6 +279,10 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     input.focus();
   }
 
+  function setAwaitingResponse(value) {
+    awaitingResponse = Boolean(value);
+  }
+
   function showWaitingForHuman() {
     setResponderState("waiting");
     ChatUI.showBadge(body, "⏳ Esperando a un agente humano...", "cb-badge-orange", "cb-waiting-badge");
@@ -219,6 +321,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
         ChatUI.hideTyping();
         ChatUI.hideAIStatus();
         aiStatusVisible = false;
+        setAwaitingResponse(false);
         showWaitingForHuman();
         resetInput();
         return true;
@@ -228,7 +331,9 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
         ChatUI.hideTyping();
         ChatUI.hideAIStatus();
         aiStatusVisible = false;
+        setAwaitingResponse(false);
         ChatUI.addBotMessage(body, text, sender === "bot" ? ensureInterventionButton : null);
+        flushPendingAITrace();
       }
     }
 
@@ -265,16 +370,16 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     ChatUI.hideTyping();
     ChatUI.hideAIStatus();
     aiStatusVisible = false;
+    pendingAITrace = null;
+    pendingAITraceId = null;
+    lastPipelineStatusMessage = "";
     clearSession();
     resetComposer();
     showFormScreen();
   }
 
   async function ensureInterventionButton() {
-    const existingStatus = statusEl?.textContent?.toLowerCase() || "";
-    const isHumanActive = existingStatus.includes("humano") && existingStatus.includes("respondiendo");
-    const isWaitingHuman = existingStatus.includes("intervención humana solicitada");
-    if (isHumanActive || isWaitingHuman) return;
+    if (isHumanStateActive()) return;
 
     ChatUI.addInterventionButton(body, async (evt) => {
       const btn = evt?.currentTarget;
@@ -314,13 +419,24 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
         const message = payload?.current_status_message;
         const isProcessing = Boolean(payload?.is_processing);
         const hasStatusMessage = typeof message === "string" && message.trim().length > 0;
+        const effectiveMessage = hasStatusMessage ? message.trim() : lastPipelineStatusMessage;
 
-        if (hasStatusMessage) {
+        if (isProcessing) {
+          setAwaitingResponse(true);
+        } else if (!hasStatusMessage && !lastPipelineStatusMessage) {
+          setAwaitingResponse(false);
+        }
+
+        if (effectiveMessage) {
           aiStatusVisible = true;
-          ChatUI.showAIStatus(body, message, payload?.current_status_step);
+          ChatUI.showAIStatus(body, effectiveMessage, payload?.current_status_step);
+          setPipelineLiveStatus(effectiveMessage);
         } else {
           aiStatusVisible = false;
           ChatUI.hideAIStatus();
+          if (!isProcessing) {
+            showBotActive();
+          }
         }
 
         if (isProcessing) {
@@ -335,11 +451,16 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
         }
       },
 
+      getPollIntervalMs: () => {
+        return awaitingResponse ? ChatPoll.FAST_POLL_INTERVAL_MS : ChatPoll.POLL_INTERVAL_MS;
+      },
+
       onMessages: (messages) => {
         dbg("poll:messages", { count: messages.length });
         const parsed = ChatPoll.parseMessages(messages);
         for (const msg of parsed) {
           if (msg.sender === "customer") {
+            capturePipelineFromMessage(msg);
             renderImages(msg?.images, "customer");
             continue;
           }
@@ -353,6 +474,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
 
       onIntervention: () => {
         dbg("poll:intervention");
+        setAwaitingResponse(false);
         ChatUI.hideTyping();
         showWaitingForHuman();
         const interventionBtn = body.querySelector(".cb-intervention-btn");
@@ -363,6 +485,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
 
       onSellerActive: () => {
         dbg("poll:seller-active");
+        setAwaitingResponse(false);
         showSellerActive();
         const interventionBtn = body.querySelector(".cb-intervention-btn");
         if (interventionBtn && typeof interventionBtn.remove === "function") {
@@ -411,6 +534,10 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     ChatUI.hideTyping();
     ChatUI.hideAIStatus();
     aiStatusVisible = false;
+    awaitingResponse = false;
+    pendingAITrace = null;
+    pendingAITraceId = null;
+    lastPipelineStatusMessage = "";
     clearSession();
 
     startingSession = false;
@@ -606,6 +733,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
         await ChatAPI.uploadImages(chatUuid, pendingImages, sessionToken);
         resetComposer();
         if (!hasText) {
+          setAwaitingResponse(true);
           showBotActive();
           ChatUI.showTyping(body);
         }
@@ -626,6 +754,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     }
 
     ChatUI.addUserMessage(body, text);
+    setAwaitingResponse(true);
     ChatUI.showTyping(body);
 
     try {
@@ -634,6 +763,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
       dbg("send:ok");
     } catch (err) {
       dbg("send:error", err);
+      setAwaitingResponse(false);
       ChatUI.hideTyping();
       ChatUI.addSystemMessage(body, "Error al enviar el mensaje. Inténtalo de nuevo.");
       resetInput();

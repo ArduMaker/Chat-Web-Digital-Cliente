@@ -123,6 +123,56 @@ const ChatUI = (function () {
       body.appendChild(d);
       scroll(body);
     }
+
+    function addAITrace(body, trace, traceId) {
+      if (!body || !Array.isArray(trace) || trace.length === 0) return;
+
+      const uid = String(traceId || `trace-${Date.now()}`);
+      if (body.querySelector(`[data-ai-trace-id="${uid}"]`)) return;
+
+      const wrap = document.createElement("details");
+      wrap.className = "cb-ai-trace";
+      wrap.setAttribute("data-ai-trace-id", uid);
+
+      const summary = document.createElement("summary");
+      summary.textContent = "Ver pasos de la IA";
+      wrap.appendChild(summary);
+
+      const list = document.createElement("ol");
+      list.className = "cb-ai-trace-list";
+
+      for (const step of trace) {
+        const item = document.createElement("li");
+        const timestamp = String(step?.loggedAt || step?.timestamp || "").trim();
+        const title = String(step?.label || step?.status || "Paso de procesamiento").trim();
+        const detail = String(step?.detail || "").trim();
+
+        const titleEl = document.createElement("div");
+        titleEl.className = "cb-ai-trace-title";
+        titleEl.textContent = title;
+        item.appendChild(titleEl);
+
+        if (detail) {
+          const detailEl = document.createElement("div");
+          detailEl.className = "cb-ai-trace-detail";
+          detailEl.textContent = detail;
+          item.appendChild(detailEl);
+        }
+
+        if (timestamp) {
+          const timeEl = document.createElement("div");
+          timeEl.className = "cb-ai-trace-time";
+          timeEl.textContent = timestamp;
+          item.appendChild(timeEl);
+        }
+
+        list.appendChild(item);
+      }
+
+      wrap.appendChild(list);
+      body.appendChild(wrap);
+      scroll(body);
+    }
   
     // ── Typing indicator ────────────────────────────────────────────────────────
     let typingEl = null;
@@ -282,6 +332,15 @@ const ChatUI = (function () {
       out = out.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
       out = out.replace(/\*(.+?)\*/g, "<em>$1</em>");
       out = out.replace(/`([^`]+?)`/g, "<code class=\"cb-md-inline\">$1</code>");
+
+      // Convierte referencias WP-1234 en enlaces al post de WordPress.
+      out = out.replace(/\bWP-(\d+)\b/gi, (_, postId) => {
+        const id = String(postId || "").trim();
+        if (!id) return "";
+        const href = `https://digitalmtx.com/?p=${id}`;
+        return `<a class=\"cb-wp-link\" href=\"${href}\" target=\"_blank\" rel=\"noopener noreferrer\">WP-${id}</a>`;
+      });
+
       out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) => {
         const href = safeLink(url);
         if (!href) return label;
@@ -407,6 +466,7 @@ const ChatUI = (function () {
       addUserMessage,
       addBotMessage,
       addSystemMessage,
+      addAITrace,
       showTyping,
       hideTyping,
       showBadge,
