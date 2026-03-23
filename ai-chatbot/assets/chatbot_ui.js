@@ -357,7 +357,16 @@ const ChatUI = (function () {
         const href = `https://digitalmtx.com/?p=${id}`;
         return `<a class=\"cb-wp-link\" href=\"${href}\" target=\"_blank\" rel=\"noopener noreferrer\">WP-${id}</a>`;
       });
-
+      // Convierte URLs en enlaces clicables.
+      out = out.replace(/(https?:\/\/[^\s<>\)\]]+)/gi, (match) => {
+        const url = String(match || "").trim();
+        if (!url) return "";
+        let displayText = url;
+        if (url.length > 50) {
+          displayText = url.substring(0, 47) + "...";
+        }
+        return `<a class="cb-url-link" href="${url}" target="_blank" rel="noopener noreferrer">${displayText}</a>`;
+      });
       out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) => {
         const href = safeLink(url);
         if (!href) return label;

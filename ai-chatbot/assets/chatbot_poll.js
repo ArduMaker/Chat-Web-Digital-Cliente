@@ -152,5 +152,45 @@ const ChatPoll = (function () {
     });
   }
 
-  return { open, close, parseMessages, POLL_INTERVAL_MS, FAST_POLL_INTERVAL_MS };
+  function pollNow(chatUuid, sessionToken, handlers) {
+    if (closed || !chatUuid || !sessionToken || !handlers) return;
+    clearPollTimer();
+    try {
+      ChatAPI.pollChat(chatUuid, sessionToken, lastServerTime).then((data) => {
+        if (data?.server_time !== undefined && data?.server_time !== null) {
+          lastServerTime = data.server_time;
+        }
+        if (data?.ai_status) {
+          handlers.onAIStatus?.(data.ai_status);
+          if (data.ai_status.is_processing) handlers.onThinking?.();
+        }
+        if (data?.has_new && Array.isArray(data?.messages)) {
+          handlers.onMessages?.(data.messages);
+        }
+        if (data?.has_new && Array.isArray(data?.images)) {
+          handlers.onImages?.(data.images);
+        }
+        if (data?.chat_status) {
+          if (data.chat_status.status === "closed") {
+            handlers.onClosed?.(data.chat_status);
+            close();
+            return;
+          }
+          if (data.chat_status.humanRequested) {
+            handlers.onIntervention?.();
+          }
+          if (data.chat_status.responder === "seller") {
+            handlers.onSellerActive?.();
+          }
+        }
+        retries = 0;
+      }).catch((err) => {
+        dbg("poll:error", err);
+      });
+    } catch (err) {
+      dbg("poll:error", err);
+    }
+  }
+
+  return { open, close, parseMessages, pollNow, POLL_INTERVAL_MS, FAST_POLL_INTERVAL_MS };
 })();

@@ -442,6 +442,9 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     const headerContainer = panel.querySelector("#cb-intervention-container");
     if (!headerContainer) return;
 
+    const existing = headerContainer.querySelector(".cb-intervention-btn");
+    if (existing) return;
+
     ChatUI.addInterventionButton(body, async (evt) => {
       const btn = evt?.currentTarget;
       if (!btn || typeof btn !== "object") return;
@@ -840,6 +843,22 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
       await ChatAPI.sendMessage(chatUuid, customerName, text, sessionToken);
       saveSession();
       dbg("send:ok");
+      setTimeout(() => {
+        if (pollOpen && chatUuid && sessionToken) {
+          ChatPoll.pollNow(chatUuid, sessionToken, {
+            onAIStatus: () => {},
+            onThinking: () => {},
+            onMessages: () => {},
+            onImages: () => {},
+            onIntervention: () => {},
+            onSellerActive: () => {},
+            onClosed: () => {},
+            onUnauthorized: () => {},
+            onError: () => {},
+            getPollIntervalMs: () => (awaitingResponse ? ChatPoll.FAST_POLL_INTERVAL_MS : ChatPoll.POLL_INTERVAL_MS),
+          });
+        }
+      }, 100);
     } catch (err) {
       dbg("send:error", err);
       setAwaitingResponse(false);

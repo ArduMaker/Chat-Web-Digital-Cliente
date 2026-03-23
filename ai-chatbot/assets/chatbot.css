@@ -85,6 +85,7 @@
   .cb-md-table th{background:#f8fafc;font-weight:600}
   .cb-msg a{color:#1d4ed8;text-decoration:underline}
   .cb-msg a.cb-wp-link{color:#2563eb;font-weight:600}
+  .cb-msg a.cb-url-link{color:#2563eb}
 
   /* Imágenes recibidas en mensajes */
   .cb-msg-images{display:flex;gap:8px;flex-wrap:wrap;max-width:82%;margin-top:2px}
