@@ -307,7 +307,19 @@ const ChatUI = (function () {
     }
   
     // ── Utilitários ─────────────────────────────────────────────────────────────
-    function scroll(body) { body.scrollTop = body.scrollHeight; }
+    function isAtBottom(body) {
+      if (!body) return true;
+      const tolerance = 50;
+      return body.scrollHeight - body.scrollTop - body.clientHeight <= tolerance;
+    }
+
+    function scroll(body) {
+      if (!body) return;
+      if (isAtBottom(body)) {
+        body.scrollTop = body.scrollHeight;
+      }
+    }
+
     function time() { return new Date().toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }); }
     function esc(t) {
       return String(t)
