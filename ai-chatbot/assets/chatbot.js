@@ -17,7 +17,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
   let chatFingerprint = "";
   let startingSession = false;
   let pendingImages = [];
-  let pollOpen = false;
+  let wsOpen = false;
   let aiStatusVisible = false;
   let awaitingResponse = false;
   let interventionRequested = false;
@@ -407,10 +407,10 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     return true;
   }
 
-  function stopPoll() {
-    if (!pollOpen) return;
-    ChatPoll.close();
-    pollOpen = false;
+  function stopWS() {
+    if (!wsOpen) return;
+    ChatWS.close();
+    wsOpen = false;
   }
 
   function showFormScreen() {
@@ -425,7 +425,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
 
   async function handleSessionExpired(err) {
     dbg("session:expired", err);
-    stopPoll();
+    stopWS();
     ChatUI.hideTyping();
     ChatUI.hideAIStatus();
     aiStatusVisible = false;
@@ -477,12 +477,48 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     });
   }
 
-  function openPoll() {
-    if (!chatUuid || !sessionToken || pollOpen) return;
-    pollOpen = true;
-    dbg("poll:open", { chatUuid });
+  function openWS() {
+    if (!chatUuid || !sessionToken || wsOpen) return;
+    wsOpen = true;
+    dbg("ws:opening", { chatUuid });
 
-    ChatPoll.open(chatUuid, sessionToken, {
+    ChatWS.open(chatUuid, sessionToken, {
+      onInitialState: (payload) => {
+        dbg("ws:initial_state", payload);
+
+        // Restaurar estado del chat
+        if (payload.humanRequested) {
+          interventionRequested = true;
+          showWaitingForHuman();
+        } else if (payload.responder === "seller") {
+          showSellerActive();
+        } else {
+          showBotActive();
+        }
+
+        if (payload.is_processing) {
+          setAwaitingResponse(true);
+          const statusMsg = payload.current_status_message;
+          if (statusMsg) {
+            aiStatusVisible = true;
+            ChatUI.showAIStatus(body, statusMsg, payload.current_status_step);
+          } else {
+            ChatUI.showTyping(body);
+          }
+        }
+
+        // Renderizar historial (seenKeys evita duplicados al reconectar)
+        const msgs = Array.isArray(payload.messages) ? payload.messages : [];
+        const parsed = ChatWS.parseMessages(msgs);
+        for (const msg of parsed) {
+          if (msg.sender === "customer") {
+            renderCustomerMessage(msg);
+          } else {
+            renderAgentMessage(msg);
+          }
+        }
+      },
+
       onThinking: () => {
         if (aiStatusVisible) return;
         showBotActive();
@@ -490,7 +526,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
       },
 
       onAIStatus: (payload) => {
-        dbg("poll:ai_status", payload);
+        dbg("ws:ai_status", payload);
         const message = payload?.current_status_message;
         const isProcessing = Boolean(payload?.is_processing);
         const hasStatusMessage = typeof message === "string" && message.trim().length > 0;
@@ -524,13 +560,9 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
         }
       },
 
-      getPollIntervalMs: () => {
-        return awaitingResponse ? ChatPoll.FAST_POLL_INTERVAL_MS : ChatPoll.POLL_INTERVAL_MS;
-      },
-
       onMessages: (messages) => {
-        dbg("poll:messages", { count: messages.length });
-        const parsed = ChatPoll.parseMessages(messages);
+        dbg("ws:messages", { count: messages.length });
+        const parsed = ChatWS.parseMessages(messages);
         for (const msg of parsed) {
           if (msg.sender === "customer") {
             renderCustomerMessage(msg);
@@ -549,11 +581,11 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
       },
 
       onImages: () => {
-        // Las imágenes se manejan dentro de onMessages para conservar el lado correcto por remitente.
+        // Las imágenes se manejan dentro de onMessages vía msg.images
       },
 
       onIntervention: () => {
-        dbg("poll:intervention");
+        dbg("ws:intervention");
         setAwaitingResponse(false);
         interventionRequested = true;
         ChatUI.hideTyping();
@@ -561,16 +593,16 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
       },
 
       onSellerActive: () => {
-        dbg("poll:seller-active");
+        dbg("ws:seller-active");
         setAwaitingResponse(false);
         interventionRequested = false;
         showSellerActive();
       },
 
       onClosed: () => {
-        dbg("poll:chat-closed");
+        dbg("ws:chat-closed");
         ChatUI.addSystemMessage(body, "La conversación fue cerrada.");
-        stopPoll();
+        stopWS();
         clearSession();
       },
 
@@ -579,8 +611,8 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
       },
 
       onError: (err) => {
-        dbg("poll:error", err);
-        console.warn("[Chat] Error en polling:", err);
+        dbg("ws:error", err);
+        console.warn("[Chat] Error en WebSocket:", err);
       },
     });
   }
@@ -599,13 +631,13 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
 
     showChatScreen();
     syncEndButtonVisibility();
-    openPoll();
+    openWS();
     dbg("session:restored", { chatUuid });
     return true;
   }
 
   function resetWidgetToForm() {
-    stopPoll();
+    stopWS();
     ChatUI.hideTyping();
     ChatUI.hideAIStatus();
     aiStatusVisible = false;
@@ -640,14 +672,14 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
       await restoreSessionIfPossible();
     } else {
       showChatScreen();
-      openPoll();
+      openWS();
     }
 
     setTimeout(() => (chatUuid ? input : nameInput).focus(), 100);
   };
 
   closeBtn.onclick = () => {
-    stopPoll();
+    stopWS();
     panel.classList.remove("open");
     toggleBtn.style.display = "flex";
   };
@@ -716,13 +748,9 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
       saveSession();
       syncEndButtonVisibility();
       showChatScreen();
-
-      if (body.childElementCount === 0) {
-        ChatUI.addBotMessage(body, WELCOME_MESSAGE, null);
-      }
-
+      ChatUI.addBotMessage(body, WELCOME_MESSAGE, null);
       showBotActive();
-      openPoll();
+      openWS();
       input.focus();
       dbg("chat:ready", { chatUuid });
     } catch (err) {
@@ -839,16 +867,12 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     ChatUI.showTyping(body);
     ensureInterventionButton();
 
-    try {
-      await ChatAPI.sendMessage(chatUuid, customerName, text, sessionToken);
+    const sent = ChatWS.sendMessage(text);
+    if (sent) {
       saveSession();
       dbg("send:ok");
-      if (chatUuid && sessionToken) {
-        stopPoll();
-        openPoll();
-      }
-    } catch (err) {
-      dbg("send:error", err);
+    } else {
+      dbg("send:error — ws not open");
       setAwaitingResponse(false);
       ChatUI.hideTyping();
       ChatUI.addSystemMessage(body, "Error al enviar el mensaje. Inténtalo de nuevo.");
