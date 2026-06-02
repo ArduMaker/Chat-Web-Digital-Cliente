@@ -75,12 +75,21 @@ const ChatUI = (function () {
       const fmt = renderMarkdown(text);
       d.innerHTML = `${fmt}<span class="cb-msg-time">${time()}</span>`;
       body.appendChild(d);
-  
+
       if (!body.querySelector(".cb-intervention-btn") && !body.querySelector(".cb-badge")) {
         if (typeof onFirstMessage === "function") onFirstMessage();
       }
-  
+
       scroll(body);
+      return d;
+    }
+
+    function updateBotMessageEl(el, text) {
+      if (!el) return;
+      const fmt = renderMarkdown(text);
+      const timeEl = el.querySelector(".cb-msg-time");
+      const timeHtml = timeEl ? timeEl.outerHTML : `<span class="cb-msg-time">${time()}</span>`;
+      el.innerHTML = `${fmt}${timeHtml}`;
     }
 
     function addMessageImages(body, images, sender = "bot") {
@@ -502,6 +511,7 @@ const ChatUI = (function () {
       resetScroll,
       addUserMessage,
       addBotMessage,
+      updateBotMessageEl,
       addSystemMessage,
       addAITrace,
       showTyping,

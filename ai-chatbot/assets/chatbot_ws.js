@@ -55,6 +55,7 @@ const ChatWS = (function () {
         handlers?.onInitialState?.(msg);
         break;
 
+      case "chat_message":
       case "new_message":
         handlers?.onMessages?.([msg]);
         break;

@@ -28,6 +28,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
 
   const seenAgentMessageKeys = new Set();
   const seenCustomerMessageKeys = new Set();
+  const agentMessageRegistry = new Map(); // id → { text, el }
   const outboundTextQueue = [];
   const seenImageUrls = new Set();
 
@@ -348,42 +349,70 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
   function renderAgentMessage(msg) {
     const sender = getSender(msg);
     const text = getMessageText(msg);
-    const idSeed = msg?.id || msg?.sentAt || msg?.sent_at || "";
-    const key = `${sender}:${idSeed}:${text}`;
-    const alreadySeen = seenAgentMessageKeys.has(key);
+    const id = msg?.id ?? null;
 
-    if (!alreadySeen) {
-      seenAgentMessageKeys.add(key);
-
-      if (isInterventionSignal(text)) {
-        ChatUI.hideTyping();
-        ChatUI.hideAIStatus();
-        aiStatusVisible = false;
-        setAwaitingResponse(false);
-        showWaitingForHuman();
-        resetInput();
-        return true;
-      }
-
-      if (text) {
-        ChatUI.hideTyping();
-        ChatUI.hideAIStatus();
-        aiStatusVisible = false;
-        setAwaitingResponse(false);
-        ChatUI.addBotMessage(body, text, sender === "bot" ? ensureInterventionButton : null);
-        flushPendingAITrace();
-      }
+    if (isInterventionSignal(text)) {
+      ChatUI.hideTyping();
+      ChatUI.hideAIStatus();
+      aiStatusVisible = false;
+      setAwaitingResponse(false);
+      showWaitingForHuman();
+      resetInput();
+      return true;
     }
 
-    if (sender === "seller") {
-      showSellerActive();
+    // Upsert por ID: si ya conocemos este mensaje, actualizamos en lugar de duplicar
+    if (id !== null && agentMessageRegistry.has(id)) {
+      const entry = agentMessageRegistry.get(id);
+      if (text && text !== entry.text) {
+        entry.text = text;
+        if (entry.el) {
+          ChatUI.updateBotMessageEl(entry.el, text);
+        } else {
+          // Registro existía sin burbuja (llegó con texto vacío), ahora crear burbuja
+          ChatUI.hideTyping();
+          ChatUI.hideAIStatus();
+          aiStatusVisible = false;
+          setAwaitingResponse(false);
+          entry.el = ChatUI.addBotMessage(body, text, sender === "bot" ? ensureInterventionButton : null);
+          flushPendingAITrace();
+        }
+      }
+      renderImages(msg?.images, sender);
+      if (sender === "seller") showSellerActive(); else showBotActive();
+      resetInput();
+      return false;
+    }
+
+    // Primera vez que vemos este mensaje
+    let el = null;
+    if (text) {
+      ChatUI.hideTyping();
+      ChatUI.hideAIStatus();
+      aiStatusVisible = false;
+      setAwaitingResponse(false);
+      el = ChatUI.addBotMessage(body, text, sender === "bot" ? ensureInterventionButton : null);
+      flushPendingAITrace();
+    }
+
+    if (id !== null) {
+      agentMessageRegistry.set(id, { text, el });
     } else {
-      showBotActive();
+      // Sin ID: fallback a clave de contenido para evitar duplicados
+      const fallbackKey = `${sender}:${msg?.sentAt || msg?.sent_at || ""}:${text}`;
+      if (seenAgentMessageKeys.has(fallbackKey)) {
+        renderImages(msg?.images, sender);
+        if (sender === "seller") showSellerActive(); else showBotActive();
+        resetInput();
+        return false;
+      }
+      seenAgentMessageKeys.add(fallbackKey);
     }
 
     renderImages(msg?.images, sender);
+    if (sender === "seller") showSellerActive(); else showBotActive();
     resetInput();
-    return !alreadySeen;
+    return true;
   }
 
   function renderCustomerMessage(msg) {
@@ -573,7 +602,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
         }
 
         const lastMessage = parsed.length > 0 ? parsed[parsed.length - 1] : null;
-        if (lastMessage && lastMessage.sender !== "customer") {
+        if (lastMessage && lastMessage.sender !== "customer" && lastMessage.text) {
           setAwaitingResponse(false);
           ChatUI.hideTyping();
           ChatUI.hideAIStatus();
@@ -653,6 +682,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     userHasSentMessage = false;
     seenAgentMessageKeys.clear();
     seenCustomerMessageKeys.clear();
+    agentMessageRegistry.clear();
     outboundTextQueue.length = 0;
     seenImageUrls.clear();
 
@@ -716,7 +746,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     if (chatUuid && sessionToken) {
       showChatScreen();
       syncEndButtonVisibility();
-      openPoll();
+      openWS();
       input.focus();
       return;
     }
