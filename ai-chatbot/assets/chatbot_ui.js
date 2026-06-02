@@ -312,17 +312,27 @@ const ChatUI = (function () {
     }
   
     // ── Utilitários ─────────────────────────────────────────────────────────────
+    let _autoScrollEnabled = true;
+
     function isAtBottom(body) {
       if (!body) return true;
       const tolerance = 50;
       return body.scrollHeight - body.scrollTop - body.clientHeight <= tolerance;
     }
 
+    function initBody(body) {
+      body.addEventListener("scroll", () => {
+        _autoScrollEnabled = isAtBottom(body);
+      });
+    }
+
+    function resetScroll() {
+      _autoScrollEnabled = true;
+    }
+
     function scroll(body) {
-      if (!body) return;
-      if (isAtBottom(body)) {
-        body.scrollTop = body.scrollHeight;
-      }
+      if (!body || !_autoScrollEnabled) return;
+      body.scrollTop = body.scrollHeight;
     }
 
     function time() { return new Date().toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }); }
@@ -480,6 +490,8 @@ const ChatUI = (function () {
   
     return {
       createHTML,
+      initBody,
+      resetScroll,
       addUserMessage,
       addBotMessage,
       addSystemMessage,

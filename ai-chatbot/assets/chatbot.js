@@ -56,6 +56,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
   const emailInput = root.querySelector("#cb-email");
   const startBtn = root.querySelector("#cb-start");
   const body = root.querySelector("#cb-body");
+  ChatUI.initBody(body);
   const statusEl = root.querySelector("#cb-responder-status");
   const input = root.querySelector("#cb-input");
   const sendBtn = root.querySelector("#cb-send");
@@ -637,6 +638,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
 
   function resetWidgetToForm() {
     stopWS();
+    ChatUI.resetScroll();
     ChatUI.hideTyping();
     ChatUI.hideAIStatus();
     aiStatusVisible = false;
