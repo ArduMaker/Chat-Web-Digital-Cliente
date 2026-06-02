@@ -8,7 +8,7 @@ Author: Ardumaker
 
 add_action('wp_enqueue_scripts', function () {
   $dir = plugin_dir_url(__FILE__) . 'assets/';
-  $v   = '9.0';
+  $v   = '12.0';
 
   wp_enqueue_style(
     'cb-css',

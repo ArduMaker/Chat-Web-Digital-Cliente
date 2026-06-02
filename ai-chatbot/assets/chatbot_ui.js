@@ -321,8 +321,16 @@ const ChatUI = (function () {
     }
 
     function initBody(body) {
+      let lastScrollTop = -1;
       body.addEventListener("scroll", () => {
-        _autoScrollEnabled = isAtBottom(body);
+        const current = body.scrollTop;
+        const scrolledUp = lastScrollTop !== -1 && current < lastScrollTop - 5;
+        lastScrollTop = current;
+        if (scrolledUp) {
+          _autoScrollEnabled = false;
+        } else if (isAtBottom(body)) {
+          _autoScrollEnabled = true;
+        }
       });
     }
 

@@ -782,6 +782,39 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     }
   });
 
+  function addImageFiles(files) {
+    let availableSlots = MAX_IMAGES_PER_REQUEST - pendingImages.length;
+    if (availableSlots <= 0) {
+      ChatUI.addSystemMessage(body, "Solo puedes enviar hasta 5 imágenes por mensaje.");
+      return;
+    }
+    for (const file of files) {
+      if (availableSlots <= 0) break;
+      if (!file.type.startsWith("image/")) continue;
+      if (file.size > MAX_IMAGE_SIZE_BYTES) {
+        ChatUI.addSystemMessage(body, `La imagen supera 10MB y no se agregó.`);
+        continue;
+      }
+      pendingImages.push(file);
+      availableSlots -= 1;
+      ChatUI.addImagePreview(body, file, () => {
+        const idx = pendingImages.indexOf(file);
+        if (idx >= 0) pendingImages.splice(idx, 1);
+        updateSendAvailability();
+      });
+    }
+    updateSendAvailability();
+  }
+
+  panel.addEventListener("paste", (e) => {
+    const items = Array.from(e.clipboardData?.items || []);
+    const imageItems = items.filter((item) => item.type.startsWith("image/"));
+    if (imageItems.length === 0) return;
+    e.preventDefault();
+    const files = imageItems.map((item) => item.getAsFile()).filter(Boolean);
+    addImageFiles(files);
+  });
+
   function handleImageUploadButtonClick() {
     const picker = document.createElement("input");
     picker.type = "file";
@@ -790,33 +823,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
 
     picker.onchange = (e) => {
       const files = Array.from(e.target.files || []);
-      if (files.length === 0) return;
-
-      let availableSlots = MAX_IMAGES_PER_REQUEST - pendingImages.length;
-      if (availableSlots <= 0) {
-        ChatUI.addSystemMessage(body, "Solo puedes enviar hasta 5 imágenes por mensaje.");
-        return;
-      }
-
-      for (const file of files) {
-        if (availableSlots <= 0) break;
-        if (!file.type.startsWith("image/")) continue;
-        if (file.size > MAX_IMAGE_SIZE_BYTES) {
-          ChatUI.addSystemMessage(body, `La imagen ${file.name} supera 10MB y no se agregó.`);
-          continue;
-        }
-
-        pendingImages.push(file);
-        availableSlots -= 1;
-
-        ChatUI.addImagePreview(body, file, () => {
-          const idx = pendingImages.indexOf(file);
-          if (idx >= 0) pendingImages.splice(idx, 1);
-          updateSendAvailability();
-        });
-      }
-
-      updateSendAvailability();
+      if (files.length > 0) addImageFiles(files);
     };
 
     picker.click();
