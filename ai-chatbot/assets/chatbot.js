@@ -602,8 +602,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
       onClosed: () => {
         dbg("ws:chat-closed");
         ChatUI.addSystemMessage(body, "La conversación fue cerrada.");
-        stopWS();
-        clearSession();
+        setTimeout(() => resetWidgetToForm(), 2000);
       },
 
       onUnauthorized: async (err) => {
