@@ -102,7 +102,7 @@ const ChatAPI = (function () {
       throw err;
     }
 
-    return res.json();
+    return res.json().catch(() => null);
   }
 
   async function pollChat(chatUuid, sessionToken, since) {

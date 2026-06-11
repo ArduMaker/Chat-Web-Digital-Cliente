@@ -59,6 +59,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
   const body = root.querySelector("#cb-body");
   ChatUI.initBody(body);
   const statusEl = root.querySelector("#cb-responder-status");
+  const pendingAttachments = root.querySelector("#cb-pending-attachments");
   const input = root.querySelector("#cb-input");
   const sendBtn = root.querySelector("#cb-send");
 
@@ -70,8 +71,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
 
   function updateSendAvailability() {
     const hasText = Boolean(input.value.trim());
-    const hasImages = pendingImages.length > 0;
-    sendBtn.disabled = !(hasText || hasImages);
+    sendBtn.disabled = !hasText;
   }
 
   function ensureFingerprint() {
@@ -268,8 +268,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
   }
 
   function clearPendingPreviews() {
-    const previews = body.querySelectorAll(".cb-image-preview");
-    previews.forEach((el) => el.remove());
+    pendingAttachments.replaceChildren();
   }
 
   function resetComposer() {
@@ -277,6 +276,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     input.style.height = "auto";
     pendingImages = [];
     clearPendingPreviews();
+    updateAttachmentPlaceholder();
     updateSendAvailability();
   }
 
@@ -827,13 +827,21 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
       }
       pendingImages.push(file);
       availableSlots -= 1;
-      ChatUI.addImagePreview(body, file, () => {
+      ChatUI.addImagePreview(pendingAttachments, file, () => {
         const idx = pendingImages.indexOf(file);
         if (idx >= 0) pendingImages.splice(idx, 1);
+        updateAttachmentPlaceholder();
         updateSendAvailability();
       });
     }
+    updateAttachmentPlaceholder();
     updateSendAvailability();
+  }
+
+  function updateAttachmentPlaceholder() {
+    input.placeholder = pendingImages.length > 0
+      ? "Escribe un mensaje para enviar la foto..."
+      : "Escriba su mensaje...";
   }
 
   panel.addEventListener("paste", (e) => {
@@ -866,7 +874,7 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
     const hasText = Boolean(text);
     const hasImages = pendingImages.length > 0;
 
-    if (!hasText && !hasImages) return;
+    if (!hasText) return;
     if (!chatUuid || !sessionToken) return;
 
     input.value = "";
@@ -875,27 +883,14 @@ console.log("CHATBOT DIGITALMTX v5.1", Date.now());
 
     if (hasImages) {
       try {
-        await ChatAPI.uploadImages(chatUuid, pendingImages, sessionToken);
+        const uploadResult = await ChatAPI.uploadImages(chatUuid, pendingImages, sessionToken);
         resetComposer();
-        if (!hasText) {
-          setAwaitingResponse(true);
-          showBotActive();
-          ChatUI.showTyping(body);
-        }
+        renderImages(uploadResult?.images, "customer");
       } catch (err) {
         dbg("send:image-upload-error", err);
-        if (!hasText) {
-          ChatUI.addSystemMessage(body, "Error al subir imágenes. Inténtalo nuevamente.");
-          return;
-        }
         ChatUI.addSystemMessage(body, "No se pudieron subir las imágenes. Enviando solo el texto.");
         resetComposer();
       }
-    }
-
-    if (!hasText) {
-      resetInput();
-      return;
     }
 
     ChatUI.addUserMessage(body, text);

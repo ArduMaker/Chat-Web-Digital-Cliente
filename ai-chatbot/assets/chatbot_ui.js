@@ -49,6 +49,7 @@ const ChatUI = (function () {
     <div id="cb-responder-status" style="padding:8px 12px;border-top:1px solid #e2e8f0;font-size:12px;color:#64748b;background:#f8fafc;">
       Asistente virtual respondiendo
     </div>
+    <div class="cb-pending-attachments" id="cb-pending-attachments"></div>
     <div class="cb-footer">
       <textarea class="cb-input" id="cb-input" placeholder="Escriba su mensaje..." rows="1"></textarea>
       <button class="cb-send-btn" id="cb-send" disabled aria-label="Enviar">${SEND_SVG}</button>

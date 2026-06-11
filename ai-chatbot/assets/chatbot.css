@@ -108,6 +108,10 @@
   .cb-badge-orange{background:#fff7ed;border:1px solid #fed7aa;color:#c2410c}
   .cb-badge-green{background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d}
   
+  /* Adjuntos pendientes (previews antes de enviar) */
+  .cb-pending-attachments{display:flex;flex-wrap:wrap;gap:4px;padding:0 12px;background:white;flex-shrink:0}
+  .cb-pending-attachments:empty{display:none;padding:0}
+
   /* Footer */
   .cb-footer{padding:12px;border-top:1px solid #f1f5f9;display:flex;gap:8px;background:white;flex-shrink:0;align-items:flex-end}
   .cb-input{flex:1;border:1.5px solid #e2e8f0;border-radius:12px;padding:10px 14px;font-size:14px;outline:none;resize:none;font-family:inherit;line-height:1.4;max-height:100px;transition:border-color .2s}
@@ -138,6 +142,6 @@
   .cb-image-upload-btn:hover{border-color:#FF8057;color:#FF8057}
   .cb-image-upload-label{font-size:13px;font-weight:500}
   @media(max-width:480px){.cb-image-upload-label{display:none}.cb-image-upload-btn{width:40px;padding:0}}
-  .cb-image-preview{position:relative;display:inline-block;margin:4px}
+  .cb-image-preview{position:relative;display:inline-block;margin:8px 4px}
   .cb-image-preview img{width:60px;height:60px;object-fit:cover;border-radius:8px;border:1px solid #e2e8f0}
   .cb-image-preview-remove{position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:#ef4444;color:white;border:0;cursor:pointer;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center}
